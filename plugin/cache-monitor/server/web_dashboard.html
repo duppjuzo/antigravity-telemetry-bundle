@@ -1,0 +1,1209 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="dark" />
+  <title>Antigravity Telemetry — Usage, TPS, TTFT &amp; Cache Monitor</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b0f17;
+      --surface: #121826;
+      --surface-2: #172033;
+      --border: #222d42;
+      --text: #e6edf7;
+      --muted: #8b9bb4;
+      --emerald: #10b981;
+      --cyan: #38bdf8;
+      --amber: #f59e0b;
+      --purple: #a78bfa;
+      --rose: #fb7185;
+      --scrollbar-track: #0b0f17;
+      --scrollbar-thumb: #2c3a54;
+      scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+    }
+
+    @supports not (scrollbar-color: auto) {
+      *::-webkit-scrollbar { width: 10px; height: 10px; }
+      *::-webkit-scrollbar-track { background: var(--scrollbar-track); }
+      *::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 6px; }
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+
+    .container {
+      max-width: 1440px;
+      margin: 0 auto;
+      padding: 20px 24px 48px;
+    }
+
+    header {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 20px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .title-block h1 {
+      margin: 0;
+      font-size: 1.35rem;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .badge-live {
+      font-size: 0.72rem;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: rgba(16, 185, 129, 0.14);
+      color: var(--emerald);
+      border: 1px solid rgba(16, 185, 129, 0.35);
+    }
+
+    .subtitle {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .btn {
+      background: var(--surface);
+      color: var(--text);
+      border: 1px solid var(--border);
+      padding: 7px 13px;
+      border-radius: 8px;
+      font-size: 0.84rem;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .btn:hover { background: var(--surface-2); border-color: #364766; }
+    .btn.active {
+      background: rgba(56, 189, 248, 0.16);
+      border-color: var(--cyan);
+      color: var(--cyan);
+      font-weight: 600;
+    }
+    .btn.primary {
+      background: rgba(16, 185, 129, 0.15);
+      border-color: rgba(16, 185, 129, 0.5);
+      color: var(--emerald);
+      font-weight: 600;
+    }
+    .btn.primary:hover { background: rgba(16, 185, 129, 0.24); }
+    .btn.live-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+    }
+    .btn.live-on {
+      background: rgba(16, 185, 129, 0.16);
+      border-color: rgba(16, 185, 129, 0.55);
+      color: var(--emerald);
+      font-weight: 600;
+    }
+    .btn.live-on:hover { background: rgba(16, 185, 129, 0.24); }
+    .live-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--muted);
+      display: inline-block;
+      flex-shrink: 0;
+    }
+    .live-on .live-dot,
+    .live-banner.is-live .live-dot {
+      background: var(--emerald);
+      box-shadow: 0 0 8px rgba(16, 185, 129, 0.7);
+    }
+    @media (prefers-reduced-motion: no-preference) {
+      .live-on .live-dot,
+      .live-banner.is-live .live-dot {
+        animation: livePulse 2.4s ease-in-out infinite;
+      }
+    }
+    @keyframes livePulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.45; transform: scale(0.85); }
+    }
+
+    .live-banner {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px 18px;
+      margin-bottom: 16px;
+      padding: 12px 16px;
+      border-radius: 12px;
+      background: linear-gradient(90deg, rgba(16, 185, 129, 0.08), rgba(56, 189, 248, 0.04));
+      border: 1px solid rgba(16, 185, 129, 0.32);
+      transition: border-color 0.35s ease, box-shadow 0.35s ease;
+    }
+    .live-banner.flash {
+      border-color: var(--cyan);
+      box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.35), 0 0 18px rgba(16, 185, 129, 0.16);
+    }
+    .live-banner-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      min-width: 0;
+    }
+    .live-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      color: var(--emerald);
+      background: rgba(16, 185, 129, 0.14);
+      padding: 3px 8px;
+      border-radius: 999px;
+      flex-shrink: 0;
+    }
+    .live-meta {
+      font-size: 0.84rem;
+      color: var(--text);
+      font-weight: 500;
+    }
+    .live-meta .muted {
+      color: var(--muted);
+      font-weight: 400;
+    }
+    .live-metrics {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px 14px;
+      font-size: 0.82rem;
+      font-variant-numeric: tabular-nums;
+    }
+    .live-metric {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 5px;
+    }
+    .live-metric-k {
+      color: var(--muted);
+      font-size: 0.74rem;
+      text-transform: uppercase;
+    }
+    .live-metric-v {
+      font-weight: 700;
+    }
+    .visually-hidden:where(:not(:focus-within, :active)) {
+      position: absolute !important;
+      clip-path: inset(50%) !important;
+      overflow: hidden !important;
+      width: 1px !important;
+      height: 1px !important;
+      margin: -1px !important;
+      padding: 0 !important;
+      border: 0 !important;
+      white-space: nowrap !important;
+    }
+    .session-link-btn {
+      background: none;
+      border: 0;
+      padding: 0;
+      color: inherit;
+      font: inherit;
+      text-align: left;
+      cursor: pointer;
+    }
+    .session-link-btn:focus-visible {
+      outline: 2px solid var(--cyan);
+      outline-offset: 2px;
+      border-radius: 4px;
+    }
+
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 14px;
+      margin-bottom: 20px;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px 18px;
+    }
+
+    .kpi-label {
+      font-size: 0.78rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .kpi-value {
+      font-size: 1.75rem;
+      font-weight: 700;
+      margin: 6px 0 4px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .kpi-sub {
+      font-size: 0.8rem;
+      color: var(--muted);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 12px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .progress-track {
+      height: 6px;
+      background: #1d2638;
+      border-radius: 999px;
+      overflow: hidden;
+      margin: 8px 0 6px;
+    }
+    .progress-fill {
+      height: 100%;
+      border-radius: 999px;
+    }
+
+    .c-emerald { color: var(--emerald); }
+    .c-cyan { color: var(--cyan); }
+    .c-amber { color: var(--amber); }
+    .c-purple { color: var(--purple); }
+
+    .charts-grid {
+      display: grid;
+      grid-template-columns: 1.3fr 1fr;
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+    @media (max-width: 980px) {
+      .charts-grid { grid-template-columns: 1fr; }
+    }
+
+    .section-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 12px;
+      flex-wrap: wrap;
+    }
+    .section-title {
+      margin: 0;
+      font-size: 1rem;
+      font-weight: 600;
+    }
+    .section-meta {
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+
+    .heatmap-wrap {
+      overflow-x: auto;
+      padding-bottom: 4px;
+    }
+    .heatmap-grid {
+      display: inline-grid;
+      grid-auto-flow: column;
+      grid-template-rows: repeat(7, 13px);
+      gap: 3px;
+    }
+    .hm-cell {
+      width: 13px;
+      height: 13px;
+      border-radius: 3px;
+      background: #1a2234;
+      cursor: pointer;
+    }
+    .hm-cell.l1 { background: #064e3b; }
+    .hm-cell.l2 { background: #047857; }
+    .hm-cell.l3 { background: #10b981; }
+    .hm-cell.l4 { background: #34d399; }
+    .hm-cell.today { outline: 1.5px solid var(--cyan); outline-offset: 1px; }
+
+    .daily-bars {
+      display: flex;
+      align-items: flex-end;
+      gap: 6px;
+      height: 138px;
+      padding-top: 10px;
+      overflow-x: auto;
+    }
+    .bar-col {
+      flex: 1 0 22px;
+      max-width: 44px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      height: 100%;
+      justify-content: flex-end;
+      gap: 4px;
+    }
+    .bar-stack {
+      width: 100%;
+      display: flex;
+      flex-direction: column-reverse;
+      border-radius: 4px 4px 0 0;
+      overflow: hidden;
+      min-height: 3px;
+    }
+    .bar-cached { background: var(--emerald); }
+    .bar-input { background: var(--cyan); }
+    .bar-output { background: var(--purple); }
+    .bar-label {
+      font-size: 0.68rem;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+
+    .hourly-bars {
+      display: grid;
+      grid-template-columns: repeat(24, 1fr);
+      align-items: flex-end;
+      gap: 4px;
+      height: 100px;
+      margin-top: 8px;
+    }
+    .hr-col {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      height: 100%;
+      justify-content: flex-end;
+      gap: 3px;
+    }
+    .hr-bar {
+      width: 100%;
+      background: linear-gradient(180deg, var(--cyan), #0284c7);
+      border-radius: 3px 3px 0 0;
+      min-height: 2px;
+    }
+    .hr-lbl {
+      font-size: 0.65rem;
+      color: var(--muted);
+    }
+
+    /* Responsive table pattern */
+    .table-wrapper {
+      overflow: auto;
+      max-inline-size: 100%;
+      max-block-size: min(540px, 75vh);
+      container-type: inline-size;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--surface);
+    }
+    .table-wrapper:focus-visible {
+      outline: 2px solid var(--cyan);
+      outline-offset: 2px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+      font-size: 0.84rem;
+      font-variant-numeric: tabular-nums;
+    }
+    caption.sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+    }
+
+    thead {
+      position: sticky;
+      inset-block-start: 0;
+      z-index: 2;
+      background: var(--surface-2);
+    }
+    th, td {
+      padding: 10px 12px;
+      text-align: right;
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+    }
+    th:first-child, td:first-child {
+      text-align: left;
+    }
+    thead th {
+      font-weight: 600;
+      color: var(--muted);
+      font-size: 0.76rem;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+    tbody th {
+      position: sticky;
+      inset-inline-start: 0;
+      z-index: 1;
+      background: var(--surface);
+      text-align: left;
+      font-weight: 600;
+      color: var(--text);
+    }
+    tbody tr.clickable { cursor: pointer; }
+    tbody tr.clickable:hover td,
+    tbody tr.clickable:hover th {
+      background: rgba(56, 189, 248, 0.08);
+    }
+
+    @container (width < 600px) {
+      table.responsive, table.responsive thead, table.responsive tbody,
+      table.responsive tr, table.responsive th, table.responsive td {
+        display: block;
+      }
+      table.responsive thead { display: none; }
+      table.responsive tr {
+        margin-block-end: 12px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        overflow: hidden;
+      }
+      table.responsive tbody th {
+        position: sticky;
+        inset-block-start: 0;
+        z-index: 2;
+        background: var(--surface-2);
+        text-align: left;
+      }
+      table.responsive td {
+        display: flex;
+        justify-content: space-between;
+        text-align: right;
+      }
+      table.responsive td::before {
+        content: attr(data-label) ": ";
+        color: var(--muted);
+        font-weight: 500;
+      }
+    }
+
+    .pill {
+      display: inline-block;
+      padding: 2px 7px;
+      border-radius: 6px;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+    .pill-green { background: rgba(16, 185, 129, 0.14); color: var(--emerald); }
+    .pill-cyan { background: rgba(56, 189, 248, 0.14); color: var(--cyan); }
+    .pill-amber { background: rgba(245, 158, 11, 0.14); color: var(--amber); }
+
+    .search-input {
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 6px 12px;
+      font-size: 0.84rem;
+      min-width: 240px;
+    }
+    .search-input:focus { outline: 1px solid var(--cyan); border-color: var(--cyan); }
+
+    dialog#session-dialog {
+      background: var(--surface);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      max-width: 1120px;
+      width: min(94vw, 1120px);
+      max-height: 86vh;
+      padding: 20px;
+      box-shadow: 0 24px 64px rgba(0, 0, 0, 0.65);
+    }
+    dialog#session-dialog::backdrop {
+      background: rgba(5, 8, 14, 0.72);
+      backdrop-filter: blur(4px);
+    }
+    .dialog-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 16px;
+      margin-bottom: 14px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    .stack { display: flex; flex-direction: column; gap: 20px; }
+    .truncate-cell {
+      max-width: 280px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      display: inline-block;
+      vertical-align: bottom;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="title-block">
+        <h1>
+          Antigravity Telemetry Dashboard
+          <span class="badge-live" id="status-badge">LOCAL READ-ONLY</span>
+        </h1>
+        <p class="subtitle" id="subtitle-meta">Loading local SQLite &amp; transcript metrics...</p>
+      </div>
+      <div class="controls" id="range-controls">
+        <button class="btn" type="button" data-range="since18">18:00+ (6PM)</button>
+        <button class="btn" type="button" data-range="today">Today</button>
+        <button class="btn" type="button" data-range="7d">7 Days</button>
+        <button class="btn" type="button" data-range="30d">30 Days</button>
+        <button class="btn active" type="button" data-range="all">All History</button>
+        <button class="btn live-toggle live-on" id="live-btn" type="button" aria-pressed="true"><span class="live-dot" aria-hidden="true"></span> Live 5s<span aria-hidden="true" id="live-state-label">: ON</span></button>
+        <button class="btn primary" id="refresh-btn" type="button">↻ Refresh</button>
+      </div>
+    </header>
+
+    <main id="main-content">
+      <section class="live-banner is-live" id="live-step-banner" aria-label="Real-Time Latest Step Telemetry">
+        <div class="live-banner-left">
+          <span class="live-tag"><span class="live-dot" aria-hidden="true"></span> Latest Step</span>
+          <span class="live-meta" id="live-step-meta">Waiting for latest step metrics...</span>
+          <button class="btn" type="button" id="live-inspect-btn" hidden>Inspect Waterfall</button>
+        </div>
+        <div class="live-metrics" id="live-step-metrics"></div>
+      </section>
+
+      <section class="kpi-grid" aria-label="Key Performance Metrics">
+      <div class="card">
+        <div class="kpi-label"><span>Total Tokens</span><span class="c-purple" id="kpi-turns">0 turns</span></div>
+        <div class="kpi-value" id="kpi-total-tokens">-</div>
+        <div class="kpi-sub" id="kpi-token-split">In: - · Cache: - · Out: -</div>
+      </div>
+
+      <div class="card">
+        <div class="kpi-label"><span>Prompt Cache Hit Rate</span><span class="c-emerald" id="kpi-saved">$0.00 saved</span></div>
+        <div class="kpi-value c-emerald" id="kpi-cache-rate">-</div>
+        <div class="progress-track"><div class="progress-fill" id="kpi-cache-bar" style="width:0%;background:var(--emerald)"></div></div>
+        <div class="kpi-sub" id="kpi-cost-sub">Est. spend: -</div>
+      </div>
+
+      <div class="card">
+        <div class="kpi-label"><span>TTFT (首字延迟)</span><span class="c-amber">Avg</span></div>
+        <div class="kpi-value c-amber" id="kpi-ttft-avg">-</div>
+        <div class="kpi-sub" id="kpi-ttft-sub">P50: - · P90: - · Min/Max: -</div>
+      </div>
+
+      <div class="card">
+        <div class="kpi-label"><span>Stream TPS (流式吐字)</span><span class="c-cyan" id="kpi-e2e-tps">E2E: -</span></div>
+        <div class="kpi-value c-cyan" id="kpi-stream-tps">-</div>
+        <div class="kpi-sub" id="kpi-tps-sub">P50: - · Peak: -</div>
+      </div>
+
+      <div class="card">
+        <div class="kpi-label"><span>Thinking Overhead</span><span class="c-amber" id="kpi-think-time">0s</span></div>
+        <div class="kpi-value" id="kpi-think-tokens">-</div>
+        <div class="kpi-sub" id="kpi-think-sub">Avg / step: -</div>
+      </div>
+
+      <div class="card">
+        <div class="kpi-label"><span>Sessions &amp; Tools</span><span class="c-emerald" id="kpi-streak">0d streak</span></div>
+        <div class="kpi-value" id="kpi-sessions">-</div>
+        <div class="kpi-sub" id="kpi-tools-sub">Tool success: -</div>
+      </div>
+    </section>
+
+    <section class="charts-grid">
+      <div class="card">
+        <div class="section-header">
+          <h2 class="section-title">Daily Token, Cache &amp; Speed Trend</h2>
+          <span class="section-meta">Green: Cached · Blue: Fresh Input · Purple: Output</span>
+        </div>
+        <div class="daily-bars" id="daily-bars"></div>
+        <div class="section-header" style="margin-top:16px;margin-bottom:6px;">
+          <h3 class="section-title" style="font-size:0.9rem;">All-Time Activity Heatmap</h3>
+          <span class="section-meta" id="heatmap-hover">Hover any day to inspect</span>
+        </div>
+        <div class="heatmap-wrap"><div class="heatmap-grid" id="heatmap-grid"></div></div>
+      </div>
+
+      <div class="card">
+        <div class="section-header">
+          <h2 class="section-title">24-Hour Coding Rhythm</h2>
+          <span class="section-meta">Token activity by hour of day</span>
+        </div>
+        <div class="hourly-bars" id="hourly-bars"></div>
+        <div class="section-header" style="margin-top:18px;margin-bottom:6px;">
+          <h3 class="section-title" style="font-size:0.9rem;">Top Tools &amp; Surfaces</h3>
+        </div>
+        <div id="tools-chips" class="kpi-sub" style="gap:6px;"></div>
+      </div>
+    </section>
+
+    <div class="stack">
+      <section class="card">
+        <div class="section-header">
+          <h2 class="section-title" id="model-table-title">Model Breakdown — Usage, Cache Hit %, TTFT &amp; TPS</h2>
+          <span class="section-meta">Step-level model attribution</span>
+        </div>
+        <div tabindex="0" role="region" aria-labelledby="model-table-title" class="table-wrapper">
+          <table class="responsive" id="model-table">
+            <caption class="sr-only">Per-model usage, cache hit rate, TTFT, and TPS metrics</caption>
+            <thead>
+              <tr>
+                <th scope="col">Model</th>
+                <th scope="col">Sessions</th>
+                <th scope="col">Turns</th>
+                <th scope="col">Fresh Input</th>
+                <th scope="col">Cached Read</th>
+                <th scope="col">Output</th>
+                <th scope="col">Thinking</th>
+                <th scope="col">Cache %</th>
+                <th scope="col">Avg TTFT</th>
+                <th scope="col">Stream TPS</th>
+                <th scope="col">E2E TPS</th>
+              </tr>
+            </thead>
+            <tbody id="model-tbody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="section-header">
+          <h2 class="section-title" id="session-table-title">Recent Sessions — Click a Row for Step-by-Step TTFT / TPS Waterfall</h2>
+          <input type="search" class="search-input" id="session-search" placeholder="Filter by title, model, or project..." aria-label="Filter sessions" />
+        </div>
+        <div tabindex="0" role="region" aria-labelledby="session-table-title" class="table-wrapper">
+          <table class="responsive" id="session-table">
+            <caption class="sr-only">Recent Antigravity conversation sessions with TTFT, TPS, and cache hit rate</caption>
+            <thead>
+              <tr>
+                <th scope="col">Session / Title</th>
+                <th scope="col">Created At</th>
+                <th scope="col">Model</th>
+                <th scope="col">Turns</th>
+                <th scope="col">Tokens</th>
+                <th scope="col">Cache %</th>
+                <th scope="col">Avg TTFT</th>
+                <th scope="col">Stream TPS</th>
+                <th scope="col">E2E TPS</th>
+              </tr>
+            </thead>
+            <tbody id="session-tbody"></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+    </main>
+  </div>
+
+  <div class="visually-hidden" id="live-announcer" aria-live="polite" aria-atomic="true"></div>
+
+  <dialog id="session-dialog" aria-labelledby="dialog-title">
+    <div class="dialog-head">
+      <div>
+        <h2 class="section-title" id="dialog-title">Session Step Waterfall</h2>
+        <p class="subtitle" id="dialog-sub"></p>
+      </div>
+      <button class="btn" id="dialog-close" type="button" autofocus>Close</button>
+    </div>
+    <div tabindex="0" role="region" aria-label="Session steps waterfall" class="table-wrapper" id="steps-wrapper" style="max-block-size: 62vh;">
+      <table class="responsive" id="steps-table">
+        <thead>
+          <tr>
+            <th scope="col">Step #</th>
+            <th scope="col">Model</th>
+            <th scope="col">Input</th>
+            <th scope="col">Cache Read</th>
+            <th scope="col">Cache %</th>
+            <th scope="col">Output</th>
+            <th scope="col">Thinking</th>
+            <th scope="col">TTFT</th>
+            <th scope="col">Stream Dur</th>
+            <th scope="col">E2E Dur</th>
+            <th scope="col">Think Dur</th>
+            <th scope="col">Stream TPS</th>
+            <th scope="col">E2E TPS</th>
+          </tr>
+        </thead>
+        <tbody id="steps-tbody"></tbody>
+      </table>
+    </div>
+  </dialog>
+
+  <script>
+    let currentRange = "all";
+    let latestData = null;
+    let liveEnabled = true;
+    let lastStepKey = null;
+    let activeDialogConvoId = null;
+    let isFetching = false;
+    let flashTimer = null;
+    const POLL_MS = 5000;
+
+    const fmtNum = (n) => (n == null ? "-" : Number(n).toLocaleString("en-US"));
+    const fmtCompact = (n) => {
+      if (n == null) return "-";
+      if (n >= 1e9) return (n / 1e9).toFixed(2) + "B";
+      if (n >= 1e6) return (n / 1e6).toFixed(2) + "M";
+      if (n >= 1e3) return (n / 1e3).toFixed(1) + "K";
+      return String(n);
+    };
+    const fmtSec = (v) => (v == null ? "-" : Number(v).toFixed(2) + "s");
+    const fmtTps = (v) => (v == null ? "-" : Number(v).toFixed(1) + " tok/s");
+
+    function td(text, label, cls = "") {
+      const el = document.createElement("td");
+      el.textContent = text;
+      if (label) el.setAttribute("data-label", label);
+      if (cls) el.className = cls;
+      return el;
+    }
+
+    function th(text) {
+      const el = document.createElement("th");
+      el.scope = "row";
+      el.textContent = text;
+      return el;
+    }
+
+    function updateStatusBadge(generatedAt) {
+      const badge = document.getElementById("status-badge");
+      if (!liveEnabled) {
+        badge.textContent = "PAUSED · LOCAL";
+        return;
+      }
+      const timePart = (generatedAt && generatedAt.split(" ")[1]) || new Date().toTimeString().slice(0, 8);
+      badge.textContent = `LIVE · ${timePart}`;
+    }
+
+    async function loadStats(force = false, silent = false) {
+      if (isFetching && !force) return;
+      isFetching = true;
+      const btn = document.getElementById("refresh-btn");
+      if (!silent) {
+        btn.textContent = "Syncing...";
+        btn.disabled = true;
+      }
+      try {
+        const res = await fetch(`./api/stats?range=${encodeURIComponent(currentRange)}&force=${force ? "1" : "0"}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        latestData = await res.json();
+        renderAll(latestData);
+        updateStatusBadge(latestData.generated_at);
+      } catch (err) {
+        document.getElementById("subtitle-meta").textContent = `Error loading metrics: ${err.message}`;
+      } finally {
+        isFetching = false;
+        if (!silent) {
+          btn.textContent = "↻ Refresh";
+          btn.disabled = false;
+        }
+      }
+    }
+
+    function addMetricPill(container, label, value, cls = "") {
+      const wrap = document.createElement("span");
+      wrap.className = "live-metric";
+      const k = document.createElement("span");
+      k.className = "live-metric-k";
+      k.textContent = label;
+      const v = document.createElement("span");
+      v.className = `live-metric-v ${cls}`.trim();
+      v.textContent = value;
+      wrap.append(k, v);
+      container.appendChild(wrap);
+    }
+
+    function renderLiveBanner(step, data) {
+      const banner = document.getElementById("live-step-banner");
+      const metaEl = document.getElementById("live-step-meta");
+      const metricsEl = document.getElementById("live-step-metrics");
+      const inspectBtn = document.getElementById("live-inspect-btn");
+      banner.classList.toggle("is-live", liveEnabled);
+      metricsEl.replaceChildren();
+
+      if (!step) {
+        metaEl.textContent = "Waiting for new step telemetry in selected range...";
+        inspectBtn.hidden = true;
+        return;
+      }
+
+      const title = (step.session_title || step.convo_id || "Session").slice(0, 48);
+      metaEl.replaceChildren();
+      const strong = document.createElement("span");
+      strong.textContent = `${title} · #${step.idx}`;
+      const rest = document.createElement("span");
+      rest.className = "muted";
+      rest.textContent = ` · ${step.model || "-"} · ${step.time_str || "-"}`;
+      metaEl.append(strong, rest);
+
+      addMetricPill(metricsEl, "TTFT", fmtSec(step.ttft_sec), "c-amber");
+      addMetricPill(metricsEl, "Stream", fmtTps(step.stream_tps), "c-cyan");
+      addMetricPill(metricsEl, "E2E", fmtTps(step.e2e_tps));
+      addMetricPill(metricsEl, "Think", fmtSec(step.think_sec));
+      addMetricPill(metricsEl, "Cache", `${(step.cache_hit_rate_pct ?? 0).toFixed(1)}%`, "c-emerald");
+      addMetricPill(metricsEl, "Out", fmtCompact(step.output_tokens), "c-purple");
+
+      const matchingSess = (data.recent_sessions || []).find((s) => s.convo_id === step.convo_id);
+      if (matchingSess) {
+        inspectBtn.hidden = false;
+        inspectBtn.onclick = () => openSessionDialog(matchingSess);
+      } else {
+        inspectBtn.hidden = true;
+      }
+
+      const newKey = `${step.convo_id}:${step.idx}`;
+      if (lastStepKey !== null && newKey !== lastStepKey) {
+        banner.classList.remove("flash");
+        void banner.offsetWidth;
+        banner.classList.add("flash");
+        clearTimeout(flashTimer);
+        flashTimer = setTimeout(() => banner.classList.remove("flash"), 1600);
+
+        const dlg = document.getElementById("session-dialog");
+        if (!dlg.open) {
+          document.getElementById("live-announcer").textContent =
+            `Step ${step.idx} completed on ${step.model || "model"}: TTFT ${fmtSec(step.ttft_sec)}, Stream ${fmtTps(step.stream_tps)}, Cache ${(step.cache_hit_rate_pct ?? 0).toFixed(1)}%`;
+        }
+      }
+      lastStepKey = newKey;
+    }
+
+    function renderAll(data) {
+      const s = data.summary || {};
+      const c = data.costs || {};
+      const st = data.streaks || {};
+
+      document.getElementById("subtitle-meta").textContent =
+        `Range: ${data.time_range?.start || "-"} → ${data.time_range?.end || "-"} · Updated: ${data.generated_at || "-"}`;
+
+      renderLiveBanner(data.latest_step, data);
+
+      document.getElementById("kpi-total-tokens").textContent = fmtCompact(s.total_tokens);
+      document.getElementById("kpi-turns").textContent = `${fmtNum(s.total_turns)} turns`;
+      document.getElementById("kpi-token-split").textContent =
+        `Fresh In: ${fmtCompact(s.total_input_tokens)} · Cache: ${fmtCompact(s.total_cached_tokens)} · Out: ${fmtCompact(s.total_output_tokens)}`;
+
+      const cachePct = s.cache_hit_rate_pct ?? 0;
+      document.getElementById("kpi-cache-rate").textContent = `${cachePct.toFixed(1)}%`;
+      document.getElementById("kpi-cache-bar").style.width = `${Math.min(100, cachePct)}%`;
+      document.getElementById("kpi-saved").textContent = `$${(c.dollars_saved ?? 0).toFixed(2)} saved`;
+      document.getElementById("kpi-cost-sub").textContent =
+        `Spend: $${(c.est_spend ?? 0).toFixed(2)} (No cache: $${(c.cost_without_cache ?? 0).toFixed(2)}, -${(c.savings_pct ?? 0).toFixed(1)}%)`;
+
+      document.getElementById("kpi-ttft-avg").textContent = fmtSec(s.avg_ttft_sec);
+      document.getElementById("kpi-ttft-sub").textContent =
+        `P50: ${fmtSec(s.p50_ttft_sec)} · P90: ${fmtSec(s.p90_ttft_sec)} · Min: ${fmtSec(s.min_ttft_sec)}`;
+
+      document.getElementById("kpi-stream-tps").textContent = fmtTps(s.avg_stream_tps);
+      document.getElementById("kpi-e2e-tps").textContent = `E2E: ${fmtTps(s.avg_e2e_tps)}`;
+      document.getElementById("kpi-tps-sub").textContent =
+        `P50 Stream: ${fmtTps(s.p50_stream_tps)} · Peak: ${fmtTps(s.peak_stream_tps)}`;
+
+      document.getElementById("kpi-think-tokens").textContent = fmtCompact(s.total_thinking_tokens);
+      document.getElementById("kpi-think-time").textContent = `${(s.total_think_sec ?? 0).toFixed(0)}s total`;
+      document.getElementById("kpi-think-sub").textContent = `Avg think / step: ${fmtSec(s.avg_think_sec)}`;
+
+      document.getElementById("kpi-sessions").textContent = fmtNum(s.total_sessions);
+      document.getElementById("kpi-streak").textContent = `${st.current_streak ?? 0}d streak (best ${st.longest_streak ?? 0}d)`;
+      document.getElementById("kpi-tools-sub").textContent =
+        `Tools: ${fmtNum(s.total_tool_calls)} calls (${s.tool_success_rate_pct ?? 100}% ok)`;
+
+      renderDailyBars(data.daily || []);
+      renderHeatmap(data.all_daily || []);
+      renderHourly(data.hourly || []);
+      renderTools(data.top_tools || [], data.surfaces || {});
+      renderModelTable(data.models_list || []);
+      renderSessionTable(data.recent_sessions || []);
+
+      const dlg = document.getElementById("session-dialog");
+      if (dlg.open && activeDialogConvoId) {
+        const updatedSess = (data.recent_sessions || []).find((sess) => sess.convo_id === activeDialogConvoId);
+        if (updatedSess) renderSessionDialogContent(updatedSess);
+      }
+    }
+
+    function renderDailyBars(daily) {
+      const wrap = document.getElementById("daily-bars");
+      wrap.replaceChildren();
+      const slice = daily.slice(-24);
+      const maxTok = Math.max(1, ...slice.map((d) => d.total || 0));
+      for (const d of slice) {
+        const col = document.createElement("div");
+        col.className = "bar-col";
+        col.title = `${d.date}\nTokens: ${fmtNum(d.total)} (Cache ${d.cache_hit_rate_pct}%)\nTTFT: ${fmtSec(d.avg_ttft_sec)} | Stream TPS: ${fmtTps(d.avg_stream_tps)}`;
+        const hPct = Math.max(4, Math.round(((d.total || 0) / maxTok) * 100));
+        const stack = document.createElement("div");
+        stack.className = "bar-stack";
+        stack.style.height = `${hPct}%`;
+
+        const tot = Math.max(1, d.total || 1);
+        const addSeg = (cls, val) => {
+          const seg = document.createElement("div");
+          seg.className = cls;
+          seg.style.height = `${Math.round((val / tot) * 100)}%`;
+          stack.appendChild(seg);
+        };
+        addSeg("bar-cached", d.cached || 0);
+        addSeg("bar-input", d.input || 0);
+        addSeg("bar-output", d.output || 0);
+
+        const lbl = document.createElement("span");
+        lbl.className = "bar-label";
+        lbl.textContent = d.date.slice(5);
+        col.append(stack, lbl);
+        wrap.appendChild(col);
+      }
+    }
+
+    function renderHeatmap(allDaily) {
+      const grid = document.getElementById("heatmap-grid");
+      grid.replaceChildren();
+      const map = new Map(allDaily.map((d) => [d.date, d]));
+      const today = new Date();
+      const todayKey = today.toISOString().slice(0, 10);
+      const daysBack = 140; // 20 weeks
+      const start = new Date(today);
+      start.setDate(start.getDate() - daysBack);
+      // Align to Monday
+      const dayOfWeek = (start.getDay() + 6) % 7;
+      start.setDate(start.getDate() - dayOfWeek);
+
+      const maxTok = Math.max(1, ...allDaily.map((d) => d.total || 0));
+      const hoverEl = document.getElementById("heatmap-hover");
+      for (let d = new Date(start); d <= today; d.setDate(d.getDate() + 1)) {
+        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+        const info = map.get(key);
+        const cell = document.createElement("div");
+        cell.className = "hm-cell";
+        if (key === todayKey) cell.classList.add("today");
+        if (info && info.total > 0) {
+          const ratio = info.total / maxTok;
+          cell.classList.add(ratio > 0.65 ? "l4" : ratio > 0.35 ? "l3" : ratio > 0.12 ? "l2" : "l1");
+        }
+        cell.addEventListener("mouseenter", () => {
+          hoverEl.textContent = info
+            ? `${key}: ${fmtCompact(info.total)} tok · ${info.turns} turns · ${info.sessions} sess`
+            : `${key}: 0 tokens`;
+        });
+        grid.appendChild(cell);
+      }
+    }
+
+    function renderHourly(hourly) {
+      const wrap = document.getElementById("hourly-bars");
+      wrap.replaceChildren();
+      const maxTok = Math.max(1, ...hourly.map((h) => h.tokens || 0));
+      for (const h of hourly) {
+        const col = document.createElement("div");
+        col.className = "hr-col";
+        col.title = `${String(h.hour).padStart(2, "0")}:00 — ${fmtCompact(h.tokens)} tok (${h.turns} turns)`;
+        const bar = document.createElement("div");
+        bar.className = "hr-bar";
+        bar.style.height = `${Math.max(3, Math.round(((h.tokens || 0) / maxTok) * 100))}%`;
+        const lbl = document.createElement("span");
+        lbl.className = "hr-lbl";
+        lbl.textContent = h.hour % 3 === 0 ? String(h.hour) : "";
+        col.append(bar, lbl);
+        wrap.appendChild(col);
+      }
+    }
+
+    function renderTools(tools, surfaces) {
+      const wrap = document.getElementById("tools-chips");
+      wrap.replaceChildren();
+      for (const [surf, info] of Object.entries(surfaces)) {
+        const p = document.createElement("span");
+        p.className = "pill pill-cyan";
+        p.textContent = `${surf}: ${info.sessions} sess (${fmtCompact(info.total)})`;
+        wrap.appendChild(p);
+      }
+      for (const t of tools.slice(0, 8)) {
+        const p = document.createElement("span");
+        p.className = "pill pill-green";
+        p.textContent = `${t.name}: ${fmtNum(t.count)}`;
+        wrap.appendChild(p);
+      }
+    }
+
+    function renderModelTable(models) {
+      const tbody = document.getElementById("model-tbody");
+      tbody.replaceChildren();
+      for (const m of models) {
+        const tr = document.createElement("tr");
+        tr.append(
+          th(m.name),
+          td(fmtNum(m.sessions), "Sessions"),
+          td(fmtNum(m.turns), "Turns"),
+          td(fmtCompact(m.input), "Fresh Input"),
+          td(fmtCompact(m.cached), "Cached Read"),
+          td(fmtCompact(m.output), "Output"),
+          td(fmtCompact(m.thinking), "Thinking"),
+          td(`${(m.cache_hit_rate_pct ?? 0).toFixed(1)}%`, "Cache %", "c-emerald"),
+          td(fmtSec(m.avg_ttft_sec), "Avg TTFT", "c-amber"),
+          td(fmtTps(m.avg_stream_tps), "Stream TPS", "c-cyan"),
+          td(fmtTps(m.avg_e2e_tps), "E2E TPS")
+        );
+        tbody.appendChild(tr);
+      }
+    }
+
+    function renderSessionTable(sessions) {
+      const q = document.getElementById("session-search").value.trim().toLowerCase();
+      const tbody = document.getElementById("session-tbody");
+      tbody.replaceChildren();
+      const filtered = q
+        ? sessions.filter((s) =>
+            (s.title || "").toLowerCase().includes(q) ||
+            (s.model || "").toLowerCase().includes(q) ||
+            (s.project || "").toLowerCase().includes(q)
+          )
+        : sessions;
+
+      for (const s of filtered) {
+        const tr = document.createElement("tr");
+        tr.className = "clickable";
+        const rowHeader = document.createElement("th");
+        rowHeader.scope = "row";
+        const rowBtn = document.createElement("button");
+        rowBtn.type = "button";
+        rowBtn.className = "session-link-btn truncate-cell";
+        rowBtn.textContent = s.title || s.convo_id;
+        rowBtn.title = `${s.title}\nProject: ${s.project} (${s.convo_id})`;
+        rowHeader.appendChild(rowBtn);
+
+        tr.append(
+          rowHeader,
+          td(s.created_at || s.date, "Created At"),
+          td(s.model || "-", "Model"),
+          td(fmtNum(s.turn_count), "Turns"),
+          td(fmtCompact(s.total_tokens), "Tokens"),
+          td(`${(s.cache_hit_rate_pct ?? 0).toFixed(1)}%`, "Cache %", "c-emerald"),
+          td(fmtSec(s.avg_ttft_sec), "Avg TTFT", "c-amber"),
+          td(fmtTps(s.avg_stream_tps), "Stream TPS", "c-cyan"),
+          td(fmtTps(s.avg_e2e_tps), "E2E TPS")
+        );
+        tr.addEventListener("click", () => openSessionDialog(s));
+        tbody.appendChild(tr);
+      }
+    }
+
+    function renderSessionDialogContent(session) {
+      const wrapper = document.getElementById("steps-wrapper");
+      const prevScrollTop = wrapper ? wrapper.scrollTop : 0;
+
+      document.getElementById("dialog-title").textContent = session.title || session.convo_id;
+      document.getElementById("dialog-sub").textContent =
+        `${session.model} · ${session.project} · ${session.turn_count} turns · Cache ${(session.cache_hit_rate_pct ?? 0).toFixed(1)}% · Avg TTFT ${fmtSec(session.avg_ttft_sec)} · Avg Stream ${fmtTps(session.avg_stream_tps)}`;
+
+      const tbody = document.getElementById("steps-tbody");
+      tbody.replaceChildren();
+      for (const st of session.steps_detail || []) {
+        const tr = document.createElement("tr");
+        tr.append(
+          th(`#${st.idx}`),
+          td(st.model || "-", "Model"),
+          td(fmtNum(st.input_tokens), "Input"),
+          td(fmtNum(st.cached_tokens), "Cache Read"),
+          td(`${(st.cache_hit_rate_pct ?? 0).toFixed(1)}%`, "Cache %", "c-emerald"),
+          td(fmtNum(st.output_tokens), "Output"),
+          td(fmtNum(st.thinking_tokens), "Thinking"),
+          td(fmtSec(st.ttft_sec), "TTFT", "c-amber"),
+          td(fmtSec(st.stream_sec), "Stream Dur"),
+          td(fmtSec(st.e2e_sec), "E2E Dur"),
+          td(fmtSec(st.think_sec), "Think Dur"),
+          td(fmtTps(st.stream_tps), "Stream TPS", "c-cyan"),
+          td(fmtTps(st.e2e_tps), "E2E TPS")
+        );
+        tbody.appendChild(tr);
+      }
+      if (wrapper) wrapper.scrollTop = prevScrollTop;
+    }
+
+    function openSessionDialog(session) {
+      const dlg = document.getElementById("session-dialog");
+      activeDialogConvoId = session.convo_id;
+      renderSessionDialogContent(session);
+      if (!dlg.open) dlg.showModal();
+    }
+
+    document.getElementById("range-controls").addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-range]");
+      if (!btn) return;
+      currentRange = btn.dataset.range;
+      for (const el of document.querySelectorAll("[data-range]")) {
+        el.classList.toggle("active", el.dataset.range === currentRange);
+      }
+      lastStepKey = null;
+      loadStats(false);
+    });
+
+    document.getElementById("live-btn").addEventListener("click", () => {
+      liveEnabled = !liveEnabled;
+      const btn = document.getElementById("live-btn");
+      btn.setAttribute("aria-pressed", String(liveEnabled));
+      btn.classList.toggle("live-on", liveEnabled);
+      document.getElementById("live-state-label").textContent = liveEnabled ? ": ON" : ": OFF";
+      document.getElementById("live-step-banner").classList.toggle("is-live", liveEnabled);
+      updateStatusBadge(latestData?.generated_at);
+      if (liveEnabled) loadStats(false, true);
+    });
+
+    document.getElementById("refresh-btn").addEventListener("click", () => loadStats(true));
+    document.getElementById("session-search").addEventListener("input", () => {
+      if (latestData) renderSessionTable(latestData.recent_sessions || []);
+    });
+    document.getElementById("dialog-close").addEventListener("click", () => {
+      document.getElementById("session-dialog").close();
+    });
+    document.getElementById("session-dialog").addEventListener("click", (e) => {
+      if (e.target.id === "session-dialog") e.target.close();
+    });
+    document.getElementById("session-dialog").addEventListener("close", () => {
+      activeDialogConvoId = null;
+    });
+
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden && liveEnabled) {
+        loadStats(false, true);
+      }
+    });
+
+    setInterval(() => {
+      if (liveEnabled && !document.hidden) {
+        loadStats(false, true);
+      }
+    }, POLL_MS);
+
+    loadStats(false);
+  </script>
+</body>
+</html>

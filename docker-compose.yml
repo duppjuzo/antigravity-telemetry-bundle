@@ -1,0 +1,27 @@
+services:
+  antigravity-telemetry:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: antigravity-telemetry
+    restart: unless-stopped
+    # On Linux, if ~/.gemini is mode 0700 and owned by another UID, set PUID/PGID in .env (e.g. id -u / id -g)
+    user: "${PUID:-1000}:${PGID:-1000}"
+    ports:
+      - "${TELEMETRY_BIND_IP:-127.0.0.1}:${TELEMETRY_PORT:-8765}:8765"
+    environment:
+      TELEMETRY_HOST: "0.0.0.0"
+      TELEMETRY_PORT: "8765"
+      TELEMETRY_SECONDARY_PORT: "0"
+      GEMINI_HOME: "/data/gemini"
+      ANTIGRAVITY_CACHE_FILE: "/cache/antigravity_stats_cache.json"
+      TELEMETRY_DEMO: "${TELEMETRY_DEMO:-0}"
+      TZ: "${TZ:-Asia/Shanghai}"
+    volumes:
+      # Read-only mount of local Antigravity conversation databases & transcripts
+      - "${GEMINI_HOME_HOST:-~/.gemini}:/data/gemini:ro"
+      # Writable persistent volume for incremental analytics cache
+      - telemetry_cache:/cache
+
+volumes:
+  telemetry_cache:

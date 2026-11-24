@@ -1,0 +1,18 @@
+{
+  "command": "node",
+  "args": ["main.mjs"],
+  "restart_policy": "always",
+  "display_name": "Telemetry Dashboard",
+  "description": "Real-time Antigravity telemetry sidecar showing TPS, TTFT, cache hit rate, thinking time, and per-model token usage.",
+  "has_web_ui": true,
+  "ui_config": {
+    "display_name": "Telemetry Dashboard",
+    "views": [
+      {
+        "path": "/",
+        "entrypoint": "SIDECAR_UI_ENTRYPOINT_AUX_PANE",
+        "title": "Telemetry Dashboard"
+      }
+    ]
+  }
+}
