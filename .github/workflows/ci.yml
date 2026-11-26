@@ -1,0 +1,192 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  webui:
+    name: WebUI Build & Single-File Sync
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: webui/package-lock.json
+
+      - name: Install dependencies and build WebUI
+        working-directory: webui
+        run: |
+          npm ci
+          npm run build
+
+      - name: Verify emitted single-file web_dashboard.html
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          html_path = Path("plugin/cache-monitor/server/web_dashboard.html")
+          assert html_path.exists(), "web_dashboard.html missing after build"
+          text = html_path.read_text(encoding="utf-8")
+          assert len(text) > 10_000, f"Unexpectedly small web_dashboard.html: {len(text)}"
+          assert "<telemetry-app></telemetry-app>" in text, "Missing <telemetry-app> root element"
+          print(f"web_dashboard.html verified ({len(text)} chars)")
+          PY
+
+  python-and-smoke:
+    name: Python, Packaging & API Smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Check version consistency
+        shell: bash
+        run: python scripts/package_release.py --check-version-only
+
+      - name: Compile-check all Python files
+        shell: bash
+        run: |
+          python - <<'PY'
+          import pathlib, py_compile
+          targets = [
+              pathlib.Path("deploy.py"),
+              pathlib.Path("scripts/package_release.py"),
+              pathlib.Path("plugin/cache-monitor/cache_hook.py"),
+              *sorted(pathlib.Path("plugin/cache-monitor/server").glob("*.py")),
+          ]
+          for p in targets:
+              py_compile.compile(str(p), doraise=True)
+              print(f"py_compile OK: {p}")
+          PY
+
+      - name: Syntax-check Node launchers
+        shell: bash
+        run: |
+          node --check plugin/cache-monitor/run_hook.mjs
+          node --check plugin/cache-monitor/sidecars/telemetry/main.mjs
+
+      - name: Demo server API smoke test
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import subprocess
+          import sys
+          import time
+          import urllib.request
+
+          proc = subprocess.Popen(
+              [
+                  sys.executable,
+                  "plugin/cache-monitor/server/server.py",
+                  "--demo",
+                  "--host",
+                  "127.0.0.1",
+                  "--port",
+                  "18765",
+                  "--secondary-port",
+                  "0",
+              ],
+              stdout=subprocess.PIPE,
+              stderr=subprocess.PIPE,
+          )
+          try:
+              deadline = time.monotonic() + 10.0
+              healthy = False
+              while time.monotonic() < deadline:
+                  try:
+                      with urllib.request.urlopen("http://127.0.0.1:18765/api/health", timeout=1.5) as resp:
+                          if resp.status == 200:
+                              healthy = True
+                              break
+                  except Exception:
+                      if proc.poll() is not None:
+                          break
+                      time.sleep(0.2)
+              assert healthy, "Server failed to become healthy within 10s"
+
+              for path in ("/api/health", "/api/stats?range=today", "/api/hud", "/api/hud/status", "/api/theme/system", "/"):
+                  with urllib.request.urlopen(f"http://127.0.0.1:18765{path}", timeout=5.0) as resp:
+                      assert resp.status == 200, f"{path} returned {resp.status}"
+                      body = resp.read().decode("utf-8", errors="replace")
+                      if path == "/":
+                          assert "<telemetry-app>" in body, "Root HTML missing <telemetry-app>"
+                      else:
+                          payload = json.loads(body)
+                          assert isinstance(payload, dict), f"{path} did not return JSON object"
+                      print(f"Smoke OK: {path} (200)")
+          finally:
+              proc.terminate()
+              try:
+                  proc.wait(timeout=5)
+              except subprocess.TimeoutExpired:
+                  proc.kill()
+          PY
+
+      - name: Build and verify release archives
+        shell: bash
+        run: python scripts/package_release.py --verify
+
+  docker:
+    name: Docker Build & Health Smoke
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t antigravity-telemetry:ci .
+
+      - name: Run container smoke test
+        run: |
+          docker run -d --name telemetry-ci \
+            -p 127.0.0.1:18766:8765 \
+            -e TELEMETRY_DEMO=1 \
+            antigravity-telemetry:ci
+          python3 - <<'PY'
+          import json, time, urllib.request
+          deadline = time.monotonic() + 15.0
+          while time.monotonic() < deadline:
+              try:
+                  with urllib.request.urlopen("http://127.0.0.1:18766/api/health", timeout=1.5) as resp:
+                      if resp.status == 200:
+                          data = json.loads(resp.read().decode("utf-8"))
+                          assert data.get("status") == "ok", f"Unexpected health: {data}"
+                          print("Docker health OK:", data)
+                          raise SystemExit(0)
+              except Exception:
+                  time.sleep(0.4)
+          raise SystemExit("Docker container health check timed out")
+          PY
+
+      - name: Cleanup container
+        if: always()
+        run: docker rm -f telemetry-ci >/dev/null 2>&1 || true

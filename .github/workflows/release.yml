@@ -1,0 +1,97 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (defaults to v<VERSION>)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & Publish GitHub Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: webui/package-lock.json
+
+      - name: Resolve and validate release version
+        id: meta
+        run: |
+          VER="$(tr -d ' \t\r\n' < VERSION)"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+            if [ -z "$TAG" ]; then
+              TAG="v${VER}"
+            fi
+          else
+            TAG="${{ github.ref_name }}"
+          fi
+          echo "version=${VER}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          python3 scripts/package_release.py --check-version-only --expect-tag "$TAG"
+
+      - name: Build WebUI bundle
+        working-directory: webui
+        run: |
+          npm ci
+          npm run build
+
+      - name: Compile-check Python sources
+        run: |
+          python3 - <<'PY'
+          import pathlib, py_compile
+          targets = [
+              pathlib.Path("deploy.py"),
+              pathlib.Path("scripts/package_release.py"),
+              pathlib.Path("plugin/cache-monitor/cache_hook.py"),
+              *sorted(pathlib.Path("plugin/cache-monitor/server").glob("*.py")),
+          ]
+          for p in targets:
+              py_compile.compile(str(p), doraise=True)
+          print(f"py_compile OK ({len(targets)} files)")
+          PY
+
+      - name: Build and verify release archives
+        run: python3 scripts/package_release.py --verify
+
+      - name: Publish or update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.meta.outputs.tag }}"
+          VER="${{ steps.meta.outputs.version }}"
+          ASSETS=(
+            "dist/antigravity-telemetry-bundle-v${VER}.zip"
+            "dist/antigravity-telemetry-bundle-v${VER}.tar.gz"
+            "dist/cache-monitor-plugin-v${VER}.zip"
+            "dist/SHA256SUMS.txt"
+          )
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${ASSETS[@]}" --clobber
+          else
+            gh release create "$TAG" "${ASSETS[@]}" \
+              --title "${TAG} — Antigravity Telemetry Bundle" \
+              --generate-notes
+          fi
