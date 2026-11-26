@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import mimetypes
 import os
 import signal
 import sys
@@ -24,6 +25,16 @@ import collector  # noqa: E402
 
 VERSION = "1.2.0"
 DASHBOARD_HTML = os.path.join(BASE_DIR, "web_dashboard.html")
+ASSETS_DIR = os.path.realpath(os.path.join(BASE_DIR, "assets"))
+ASSET_MIME_TYPES = {
+    ".js": "application/javascript; charset=utf-8",
+    ".mjs": "application/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".svg": "image/svg+xml",
+    ".woff2": "font/woff2",
+    ".json": "application/json; charset=utf-8",
+    ".map": "application/json; charset=utf-8",
+}
 DEMO_MODE = False
 PRIMARY_HOST = "127.0.0.1"
 PRIMARY_PORT = 8765
@@ -80,6 +91,53 @@ class TelemetryHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self._safe_write(html_bytes)
+
+    def _send_asset(self, rel_path: str):
+        decoded = urllib.parse.unquote(rel_path)
+        if not decoded or "\x00" in decoded or decoded.startswith(("/", "\\")):
+            self._send_json(403, {"error": "Forbidden"})
+            return
+
+        parts = [p for p in decoded.replace("\\", "/").split("/") if p]
+        if not parts or any(p in (".", "..") for p in parts):
+            self._send_json(403, {"error": "Forbidden"})
+            return
+
+        candidate = os.path.realpath(os.path.join(ASSETS_DIR, *parts))
+        try:
+            common = os.path.commonpath([ASSETS_DIR, candidate])
+        except ValueError:
+            self._send_json(403, {"error": "Forbidden"})
+            return
+
+        if common != ASSETS_DIR or candidate == ASSETS_DIR:
+            self._send_json(403, {"error": "Forbidden"})
+            return
+
+        if not os.path.isfile(candidate):
+            self._send_json(404, {"error": "Asset not found"})
+            return
+
+        _, ext = os.path.splitext(candidate)
+        mime_type = (
+            ASSET_MIME_TYPES.get(ext.lower())
+            or mimetypes.guess_type(candidate)[0]
+            or "application/octet-stream"
+        )
+        try:
+            with open(candidate, "rb") as f:
+                body = f.read()
+        except OSError:
+            self._send_json(404, {"error": "Asset not found"})
+            return
+
+        self.send_response(200)
+        self.send_header("Content-Type", mime_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        self._safe_write(body)
 
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
@@ -148,6 +206,10 @@ class TelemetryHandler(BaseHTTPRequestHandler):
                     self._send_html(200, f.read())
             else:
                 self._send_json(404, {"error": "web_dashboard.html not found"})
+            return
+
+        if path.startswith("/assets/"):
+            self._send_asset(path[len("/assets/"):])
             return
 
         self._send_json(404, {"error": "Not found"})
