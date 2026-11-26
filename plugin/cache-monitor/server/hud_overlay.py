@@ -463,6 +463,10 @@ class Win32Helper:
         self.user32.IsIconic.restype = wintypes.BOOL
         self.user32.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
         self.user32.MonitorFromWindow.restype = wintypes.HMONITOR
+        self.user32.MonitorFromPoint.argtypes = [wintypes.POINT, wintypes.DWORD]
+        self.user32.MonitorFromPoint.restype = wintypes.HMONITOR
+        self.user32.GetCursorPos.argtypes = [ctypes.POINTER(wintypes.POINT)]
+        self.user32.GetCursorPos.restype = wintypes.BOOL
         self.user32.GetMonitorInfoW.argtypes = [wintypes.HMONITOR, ctypes.POINTER(_MONITORINFO)]
         self.user32.GetMonitorInfoW.restype = wintypes.BOOL
         self.user32.SetWindowPos.argtypes = [
@@ -497,6 +501,66 @@ class Win32Helper:
                 wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD
             ]
             self.dwmapi.DwmSetWindowAttribute.restype = ctypes.c_long
+
+    def get_cursor_pos(self) -> tuple[int, int] | None:
+        if not self.enabled:
+            return None
+        try:
+            pt = wintypes.POINT()
+            if self.user32.GetCursorPos(ctypes.byref(pt)):
+                return (int(pt.x), int(pt.y))
+        except Exception:
+            pass
+        return None
+
+    def get_window_pos(self, hwnd: int) -> tuple[int, int] | None:
+        if not self.enabled or not hwnd or not self.user32.IsWindow(hwnd):
+            return None
+        try:
+            rect = wintypes.RECT()
+            if self.user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+                return (int(rect.left), int(rect.top))
+        except Exception:
+            pass
+        return None
+
+    def get_dpi_for_point(self, x: int, y: int) -> int:
+        if not self.enabled:
+            return 96
+        if self._get_dpi_for_monitor is not None:
+            try:
+                hmon = self.user32.MonitorFromPoint(wintypes.POINT(int(x), int(y)), 2)
+                if hmon:
+                    dx = wintypes.UINT()
+                    dy = wintypes.UINT()
+                    if self._get_dpi_for_monitor(hmon, 0, ctypes.byref(dx), ctypes.byref(dy)) == 0 and dx.value > 0:
+                        return int(dx.value)
+            except Exception:
+                pass
+        if self._get_dpi_for_system is not None:
+            try:
+                dpi = int(self._get_dpi_for_system())
+                if dpi > 0:
+                    return dpi
+            except Exception:
+                pass
+        return 96
+
+    def get_work_area_for_point(self, x: int, y: int) -> tuple[int, int, int, int] | None:
+        if not self.enabled:
+            return None
+        try:
+            hmon = self.user32.MonitorFromPoint(wintypes.POINT(int(x), int(y)), 2)  # MONITOR_DEFAULTTONEAREST
+            if not hmon:
+                return None
+            mi = _MONITORINFO()
+            mi.cbSize = ctypes.sizeof(_MONITORINFO)
+            if self.user32.GetMonitorInfoW(hmon, ctypes.byref(mi)):
+                rc = mi.rcWork
+                return (rc.left, rc.top, rc.right, rc.bottom)
+        except Exception:
+            return None
+        return None
 
     def get_window_dpi(self, hwnd: int) -> int:
         if not self.enabled:
@@ -858,14 +922,19 @@ class TelemetryHUD:
         self.font_menu_bold = make_font("Microsoft YaHei UI", 11.5, "bold")
         self.font_menu_sub = make_font("Segoe UI", 10.5, "normal")
 
-    def _sync_scale_for_hwnd(self, hwnd: int) -> bool:
-        dpi = self.win32.get_window_dpi(hwnd)
+    def _sync_scale_for_dpi(self, dpi: int) -> bool:
         target_scale = max(0.75, dpi / 96.0)
         if abs(target_scale - self.ui_scale) <= 0.01:
             return False
         self.ui_scale = target_scale
         self._apply_scale()
         return True
+
+    def _sync_scale_for_hwnd(self, hwnd: int) -> bool:
+        return self._sync_scale_for_dpi(self.win32.get_window_dpi(hwnd))
+
+    def _sync_scale_for_point(self, x: int, y: int) -> bool:
+        return self._sync_scale_for_dpi(self.win32.get_dpi_for_point(x, y))
 
     def _apply_scale(self) -> None:
         for f, dp_val in self._font_specs:
@@ -1198,44 +1267,95 @@ class TelemetryHUD:
         self.dragging = True
         self._cancel_hover()
         self._hide_popover()
-        self.drag_start_pointer = (event.x_root, event.y_root)
-        self.drag_start_pos = (self.root.winfo_x(), self.root.winfo_y())
+        pt = self.win32.get_cursor_pos()
+        self.drag_start_pointer = pt if pt else (event.x_root, event.y_root)
+        pos = self.win32.get_window_pos(self.hud_hwnd)
+        self.drag_start_pos = pos if pos else (self.root.winfo_x(), self.root.winfo_y())
 
     def _on_drag_motion(self, event: tk.Event) -> None:
         if not self.dragging:
             return
-        dx_p = event.x_root - self.drag_start_pointer[0]
-        dy_p = event.y_root - self.drag_start_pointer[1]
+        pt = self.win32.get_cursor_pos()
+        px, py = pt if pt else (event.x_root, event.y_root)
+        dx_p = px - self.drag_start_pointer[0]
+        dy_p = py - self.drag_start_pointer[1]
         new_x = self.drag_start_pos[0] + dx_p
         new_y = self.drag_start_pos[1] + dy_p
         self.root.geometry(f"+{new_x}+{new_y}")
 
-    def _on_drag_end(self, _event: tk.Event) -> None:
+    def _on_drag_end(self, event: tk.Event) -> None:
         if not self.dragging:
             return
         self.dragging = False
-        self._sync_scale_for_hwnd(self.hud_hwnd or self.last_ag_hwnd)
-        cur_x = self.root.winfo_x()
-        cur_y = self.root.winfo_y()
-        hud_w = max(1, self.root.winfo_width())
+        pt = self.win32.get_cursor_pos()
+        pos = self.win32.get_window_pos(self.hud_hwnd)
+        cur_x, cur_y = pos if pos else (self.root.winfo_x(), self.root.winfo_y())
+        self.root.update_idletasks()
+        hud_w = max(1, self.root.winfo_width() or self.root.winfo_reqwidth())
+        hud_h = max(1, self.root.winfo_height() or self.root.winfo_reqheight())
+        ref_x, ref_y = pt if pt else (
+            (event.x_root, event.y_root) if hasattr(event, "x_root") else (cur_x + hud_w // 2, cur_y + hud_h // 2)
+        )
+        cur_cx = cur_x + hud_w // 2
+
+        if self._sync_scale_for_point(ref_x, ref_y):
+            self.root.update_idletasks()
+            hud_w = max(1, self.root.winfo_reqwidth())
+            hud_h = max(1, self.root.winfo_reqheight())
+            cur_x = cur_cx - hud_w // 2
+
+        new_x, new_y = self._clamp_to_screen(cur_x, cur_y, hud_w, hud_h, ref_point=(ref_x, ref_y))
+        self.root.geometry(f"+{new_x}+{new_y}")
+
         if self.last_ag_rect:
             l, t, r, _b = self.last_ag_rect
             ag_cx = (l + r) // 2
-            self.cfg["dx"] = (cur_x + hud_w // 2) - ag_cx
-            self.cfg["dy"] = cur_y - t
+            self.cfg["dx"] = (new_x + hud_w // 2) - ag_cx
+            self.cfg["dy"] = new_y - t
             save_hud_config(self.cfg)
             self.last_cfg_mtime_ns = self._stat_config_mtime_ns()
 
-    def _clamp_to_screen(self, x: int, y: int, w: int, h: int) -> tuple[int, int]:
-        wa = self.win32.get_work_area(self.last_ag_hwnd or self.hud_hwnd)
+    def _clamp_to_work_area(
+        self,
+        x: int,
+        y: int,
+        w: int,
+        h: int,
+        wa: tuple[int, int, int, int] | None,
+    ) -> tuple[int, int]:
         if wa:
             wl, wt, wr, wb = wa
         else:
             wl, wt = 0, 0
             wr, wb = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
-        x = max(wl + 4, min(x, wr - w - 4))
-        y = max(wt + 4, min(y, wb - h - 4))
+        min_x = wl + 4
+        max_x = wr - w - 4
+        if max_x < min_x:
+            x = wl + (wr - wl - w) // 2
+        else:
+            x = max(min_x, min(x, max_x))
+        min_y = wt + 4
+        max_y = wb - h - 4
+        if max_y < min_y:
+            y = wt + (wb - wt - h) // 2
+        else:
+            y = max(min_y, min(y, max_y))
         return x, y
+
+    def _clamp_to_screen(
+        self,
+        x: int,
+        y: int,
+        w: int,
+        h: int,
+        *,
+        ref_point: tuple[int, int] | None = None,
+    ) -> tuple[int, int]:
+        rx, ry = ref_point if ref_point is not None else (x + w // 2, y + h // 2)
+        wa = self.win32.get_work_area_for_point(rx, ry) or self.win32.get_work_area(
+            self.hud_hwnd or self.last_ag_hwnd
+        )
+        return self._clamp_to_work_area(x, y, w, h, wa)
 
     def _position_near_ag(self) -> None:
         if self.dragging:
@@ -1247,12 +1367,20 @@ class TelemetryHUD:
         if rect:
             l, t, r, _b = rect
             ag_cx = (l + r) // 2
-            x = ag_cx + int(self.cfg.get("dx", 0)) - hud_w // 2
-            y = t + int(self.cfg.get("dy", 40))
+            target_cx = ag_cx + int(self.cfg.get("dx", 0))
+            target_y = t + int(self.cfg.get("dy", 40))
         else:
             sw = self.root.winfo_screenwidth()
-            x = sw // 2 + int(self.cfg.get("dx", 0)) - hud_w // 2
-            y = 40
+            target_cx = sw // 2 + int(self.cfg.get("dx", 0))
+            target_y = 40
+
+        if self._sync_scale_for_point(target_cx, target_y + hud_h // 2):
+            self.root.update_idletasks()
+            hud_w = self.root.winfo_reqwidth()
+            hud_h = self.root.winfo_reqheight()
+
+        x = target_cx - hud_w // 2
+        y = target_y
         x, y = self._clamp_to_screen(x, y, hud_w, hud_h)
         self.root.geometry(f"+{x}+{y}")
 
@@ -1275,22 +1403,22 @@ class TelemetryHUD:
         if self.stop_event.is_set():
             return
         try:
+            if self.dragging:
+                return
             fg = self.win32.inspect_foreground_antigravity()
             if fg["is_ag"]:
                 self.last_ag_hwnd = fg["hwnd"]
                 self.last_ag_rect = fg["rect"]
-                self._sync_scale_for_hwnd(self.last_ag_hwnd)
                 if fg["title"] and fg["title"] != self.current_window_title:
                     self.current_window_title = fg["title"]
                     if not self.cfg.get("pinned_convo_id"):
                         threading.Thread(target=self._poll_once, daemon=True).start()
                 self._show_hud()
-            elif fg["is_self"] or self.menu_open or self.dragging:
+            elif fg["is_self"] or self.menu_open:
                 if self.last_ag_hwnd:
                     r = self.win32.get_window_rect(self.last_ag_hwnd)
                     if r:
                         self.last_ag_rect = r
-                self._sync_scale_for_hwnd(self.hud_hwnd or self.last_ag_hwnd)
                 self._show_hud()
             elif self.cfg.get("always_on_top"):
                 if self.last_ag_hwnd:
@@ -1304,13 +1432,14 @@ class TelemetryHUD:
                         self.last_ag_rect = rect
                         if title:
                             self.current_window_title = title
-                self._sync_scale_for_hwnd(self.last_ag_hwnd or self.hud_hwnd)
                 self._show_hud()
             else:
                 self._hide_hud()
         except Exception:
             pass
-        self.root.after(250, self._tick_track_window)
+        finally:
+            if not self.stop_event.is_set():
+                self.root.after(250, self._tick_track_window)
 
     # -- Hover Popover -------------------------------------------------------
 
@@ -1378,10 +1507,13 @@ class TelemetryHUD:
         gap = self._dp(6)
         x = rx + (rw - pw) // 2
         y = ry + rh + gap
-        wa = self.win32.get_work_area(self.last_ag_hwnd or self.hud_hwnd)
+        hud_cx, hud_cy = rx + rw // 2, ry + rh // 2
+        wa = self.win32.get_work_area_for_point(hud_cx, hud_cy) or self.win32.get_work_area(
+            self.hud_hwnd or self.last_ag_hwnd
+        )
         if wa and y + ph > wa[3] - 4:
             y = ry - ph - gap
-        x, y = self._clamp_to_screen(x, y, pw, ph)
+        x, y = self._clamp_to_screen(x, y, pw, ph, ref_point=(hud_cx, hud_cy))
         self.pop.geometry(f"+{x}+{y}")
         self.pop.deiconify()
         self.pop.attributes("-topmost", True)
@@ -1603,7 +1735,7 @@ class TelemetryHUD:
         menu.update_idletasks()
         mw = max(self._dp(230), menu.winfo_reqwidth())
         mh = menu.winfo_reqheight()
-        mx, my = self._clamp_to_screen(x_root, y_root + self._dp(4), mw, mh)
+        mx, my = self._clamp_to_screen(x_root, y_root + self._dp(4), mw, mh, ref_point=(x_root, y_root))
         menu.geometry(f"{mw}x{mh}+{mx}+{my}")
         menu.deiconify()
         menu_hwnd = self.win32.get_toplevel_hwnd(menu)
