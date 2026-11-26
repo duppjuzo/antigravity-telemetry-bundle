@@ -386,7 +386,7 @@ export class SettingsPage extends LitElement {
               <md-outlined-select
                 class="setting-select"
                 aria-label="主题模式"
-                menu-positioning="fixed"
+                menu-positioning="popover"
                 .value=${this.settings.themeMode}
                 @change=${this.handleThemeModeChange}
               >
@@ -417,7 +417,7 @@ export class SettingsPage extends LitElement {
               <md-outlined-select
                 class="setting-select"
                 aria-label="色板风格"
-                menu-positioning="fixed"
+                menu-positioning="popover"
                 .value=${this.settings.variant}
                 @change=${this.handleVariantChange}
               >
@@ -450,7 +450,7 @@ export class SettingsPage extends LitElement {
               <md-outlined-select
                 class="setting-select"
                 aria-label="推导算法"
-                menu-positioning="fixed"
+                menu-positioning="popover"
                 .value=${this.settings.specVersion}
                 @change=${this.handleSpecVersionChange}
               >
@@ -492,7 +492,7 @@ export class SettingsPage extends LitElement {
               <md-outlined-select
                 class="setting-select"
                 aria-label="主页统计作用域"
-                menu-positioning="fixed"
+                menu-positioning="popover"
                 .value=${this.settings.homeScope}
                 @change=${this.handleHomeScopeChange}
               >
