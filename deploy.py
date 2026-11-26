@@ -110,13 +110,37 @@ def _copy_tree_clean(src: Path, dst: Path) -> None:
     if not src.exists():
         raise FileNotFoundError(f"Source directory not found: {src}")
     dst.parent.mkdir(parents=True, exist_ok=True)
-    if dst.exists():
-        shutil.rmtree(dst)
     shutil.copytree(
         src,
         dst,
         ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo", ".DS_Store"),
+        dirs_exist_ok=True,
     )
+    # Remove stale files and directories (e.g. legacy server/assets/) without
+    # failing if a running sidecar process holds a CWD handle on a subdirectory.
+    for root, dirs, files in os.walk(dst, topdown=False):
+        root_path = Path(root)
+        rel_root = root_path.relative_to(dst)
+        if "__pycache__" in rel_root.parts:
+            continue
+        for fname in files:
+            if fname.endswith((".pyc", ".pyo")) or fname == ".DS_Store":
+                continue
+            rel_file = rel_root / fname
+            if not (src / rel_file).exists():
+                try:
+                    (root_path / fname).unlink()
+                except OSError:
+                    pass
+        for dname in dirs:
+            if dname == "__pycache__":
+                continue
+            rel_dir = rel_root / dname
+            if not (src / rel_dir).exists():
+                try:
+                    shutil.rmtree(root_path / dname, ignore_errors=True)
+                except OSError:
+                    pass
     if not _is_windows():
         for rel in (
             "cache_hook.py",
