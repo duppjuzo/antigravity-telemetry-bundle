@@ -170,6 +170,27 @@ class TelemetryHandler(BaseHTTPRequestHandler):
             )
             return
 
+        if path == "/api/hud":
+            qs = urllib.parse.parse_qs(parsed.query)
+            raw_convo = (qs.get("convo_id", [None])[0] or "").strip()
+            convo_id = None if (not raw_convo or raw_convo == "auto") else raw_convo
+            window_title = (qs.get("window_title", [""])[0] or "").strip()
+            force = qs.get("force", ["0"])[0] in ("1", "true", "yes")
+            demo_req = qs.get("demo", ["0"])[0] in ("1", "true", "yes")
+            try:
+                data = collector.get_hud_snapshot(
+                    convo_id=convo_id,
+                    window_title=window_title,
+                    force=force,
+                    demo=(DEMO_MODE or demo_req),
+                )
+                data["generated_at"] = datetime.now().strftime("%H:%M:%S")
+                data["version"] = VERSION
+                self._send_json(200, data)
+            except Exception as exc:
+                self._send_json(500, {"error": str(exc)})
+            return
+
         if path == "/api/stats":
             qs = urllib.parse.parse_qs(parsed.query)
             range_name = qs.get("range", ["all"])[0]

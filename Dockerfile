@@ -2,7 +2,7 @@
 FROM python:3.12-slim
 
 LABEL org.opencontainers.image.title="Antigravity Telemetry Dashboard" \
-      org.opencontainers.image.version="1.1.0" \
+      org.opencontainers.image.version="1.2.0" \
       org.opencontainers.image.description="Local usage, prompt cache hit rate, TTFT, and TPS analytics for Google Antigravity"
 
 ENV TELEMETRY_HOST=0.0.0.0 \

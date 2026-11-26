@@ -131,6 +131,15 @@ docker run -d --name antigravity-telemetry \
 
 ---
 
+### 6. Windows 跟随式悬浮胶囊条（HUD）
+
+提供零第三方依赖的 Windows 桌面无边框 M3 Monet 悬浮胶囊条（基于 Python 标准库 `tkinter` 与 Win32 API，通过 `/api/hud` 实时拉取数据，可在 WebUI 设置页开关或同步主题）：
+
+- **启动方式**：在 WebUI **设置 → 桌面悬浮窗** 一键开启，或直接双击根目录 / 插件目录下的 [`launch_hud.bat`](./launch_hud.bat)（也可运行 `pythonw plugin/cache-monitor/server/hud_overlay.py`）。
+- **核心能力**：自动跟随并吸附在 Antigravity 窗口上方（最小化或切窗时自动隐藏），实时展示当前窗口对话的 **缓存命中率**、**TPS**、**TTFT**、**轮数/步数** 与 **总 Token / 原生上下文占比**；支持鼠标拖拽记忆位置、悬停展开详情卡片、点击/右键切换或锁定会话以及实时同步 WebUI 的 M3 Monet 动态色板与深/浅色主题。
+
+---
+
 ## 通用 CLI 管理命令 (`deploy.py`)
 
 所有桌面与服务器平台均可直接使用 `deploy.py` 进行精细控制：
@@ -172,6 +181,7 @@ antigravity-telemetry-bundle/
 ├── install.sh / uninstall.sh    # macOS & Linux 一键部署/卸载脚本
 ├── install.ps1 / uninstall.ps1  # Windows PowerShell 一键部署/卸载脚本
 ├── install.bat / uninstall.bat  # Windows 双击一键部署/卸载入口
+├── launch_hud.bat               # Windows 跟随式悬浮胶囊条启动脚本
 ├── Dockerfile                   # 多架构零依赖镜像
 ├── docker-compose.yml           # Docker Compose 一键编排
 ├── .env.example                 # Docker 环境变量模板
@@ -179,6 +189,7 @@ antigravity-telemetry-bundle/
 └── plugin/
     └── cache-monitor/           # 完全自包含的 Antigravity 插件
         ├── plugin.json          # 插件清单
+        ├── launch_hud.bat       # 插件内悬浮窗快捷启动入口
         ├── run_hook.mjs         # 跨平台 CLI 摘要启动器
         ├── cache_hook.py        # 会话缓存与遥测摘要脚本
         ├── assets/logo.svg      # 插件图标
@@ -186,7 +197,8 @@ antigravity-telemetry-bundle/
         ├── sidecars/telemetry/  # 跨平台 Sidecar 启动器与清单
         └── server/              # 内嵌 Telemetry 服务核心
             ├── collector.py     # SQLite Protobuf/WAL 遥测与上下文采集引擎
-            ├── server.py        # 多线程 HTTP 服务与 REST API
+            ├── server.py        # 多线程 HTTP 服务与 REST API（含 /api/hud）
             ├── ensure_server.py # 跨平台无窗口后台守护启动器
+            ├── hud_overlay.py   # Windows M3 Monet 悬浮 HUD 胶囊窗
             └── web_dashboard.html # 零外网依赖自适应主题 aux_pane 面板
 ```
