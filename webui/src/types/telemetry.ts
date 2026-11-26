@@ -366,10 +366,69 @@ export type GlobalRange = 'since18' | 'today' | '7d' | '30d' | 'all';
 
 export type ModelScope = 'session' | 'global';
 
+export type SeedSourceMode = 'manual' | 'system-accent' | 'wallpaper';
+
+export type WallpaperMonitorMode = 'follow-window' | 'primary' | string;
+
+export interface SystemAccentInfo {
+  supported: boolean;
+  hex: string | null;
+  source: string | null;
+  reason: string;
+}
+
+export interface WallpaperCrop {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface WallpaperMonitorInfo {
+  id: string;
+  index: number;
+  label: string;
+  is_primary: boolean;
+  is_active_window: boolean;
+  rect: {
+    left: number;
+    top: number;
+    right: number;
+    bottom: number;
+    width: number;
+    height: number;
+  } | null;
+  has_image: boolean;
+  solid_color: string | null;
+  crop: WallpaperCrop | null;
+  signature: string;
+}
+
+export interface SystemWallpaperInfo {
+  supported: boolean;
+  follow_window_supported: boolean;
+  active_window_monitor_id: string | null;
+  position: string;
+  solid_color: string | null;
+  monitors: WallpaperMonitorInfo[];
+  reason: string;
+}
+
+export interface SystemThemeInfo {
+  platform: string;
+  desktop_env: string;
+  accent: SystemAccentInfo;
+  wallpaper: SystemWallpaperInfo;
+}
+
 export interface UserSettings {
   themeMode: ThemeMode;
   variant: MonetVariantId;
   specVersion: MonetSpecVersion;
+  seedSource: SeedSourceMode;
+  manualSeedHex: string;
+  wallpaperMonitor: WallpaperMonitorMode;
+  wallpaperColorIndex: number;
   homeScope: HomeScope;
   sessionMode: 'auto' | 'pinned';
   pinnedConvoId: string | null;
@@ -393,6 +452,10 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
   themeMode: 'follow-gui',
   variant: 'tonal_spot',
   specVersion: '2025',
+  seedSource: 'manual',
+  manualSeedHex: '#ADD8E6',
+  wallpaperMonitor: 'follow-window',
+  wallpaperColorIndex: 0,
   homeScope: 'session',
   sessionMode: 'auto',
   pinnedConvoId: null,

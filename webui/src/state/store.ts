@@ -6,7 +6,13 @@ import {
   type MonetVariantId,
   type ThemeMode,
 } from '../theme/monet-engine';
-import { createDefaultSeedProvider } from '../theme/seed-provider';
+import {
+  DEFAULT_SEED_HEX,
+  DynamicSeedColorProvider,
+  isValidSeedHex,
+  normalizeSeedHex,
+} from '../theme/seed-provider';
+import { extractWallpaperSeedColors } from '../theme/wallpaper-extractor';
 import {
   DEFAULT_USER_SETTINGS,
   type GlobalRange,
@@ -17,8 +23,12 @@ import {
   type HudStatus,
   type ModelScope,
   type PageId,
+  type SeedSourceMode,
   type StatsResponse,
+  type SystemThemeInfo,
   type UserSettings,
+  type WallpaperMonitorInfo,
+  type WallpaperMonitorMode,
 } from '../types/telemetry';
 
 const STORAGE_KEY = 'ag_telemetry_ui_v2';
@@ -54,6 +64,12 @@ const VALID_HOME_SCOPES = new Set<HomeScope>([
   'latest_step',
   'session',
   'global',
+]);
+
+const VALID_SEED_SOURCES = new Set<SeedSourceMode>([
+  'manual',
+  'system-accent',
+  'wallpaper',
 ]);
 
 type ApiFetchFn = (
@@ -100,6 +116,26 @@ function loadPersistedSettings(): UserSettings {
         parsed.specVersion === '2021' || parsed.specVersion === '2025'
           ? parsed.specVersion
           : DEFAULT_USER_SETTINGS.specVersion,
+      seedSource: VALID_SEED_SOURCES.has(parsed.seedSource as SeedSourceMode)
+        ? (parsed.seedSource as SeedSourceMode)
+        : DEFAULT_USER_SETTINGS.seedSource,
+      manualSeedHex:
+        typeof parsed.manualSeedHex === 'string' &&
+        isValidSeedHex(parsed.manualSeedHex)
+          ? normalizeSeedHex(parsed.manualSeedHex)
+          : DEFAULT_USER_SETTINGS.manualSeedHex,
+      wallpaperMonitor:
+        typeof parsed.wallpaperMonitor === 'string' &&
+        parsed.wallpaperMonitor.trim()
+          ? parsed.wallpaperMonitor.trim()
+          : DEFAULT_USER_SETTINGS.wallpaperMonitor,
+      wallpaperColorIndex:
+        typeof parsed.wallpaperColorIndex === 'number' &&
+        Number.isInteger(parsed.wallpaperColorIndex) &&
+        parsed.wallpaperColorIndex >= 0 &&
+        parsed.wallpaperColorIndex < 4
+          ? parsed.wallpaperColorIndex
+          : DEFAULT_USER_SETTINGS.wallpaperColorIndex,
       homeScope: VALID_HOME_SCOPES.has(parsed.homeScope as HomeScope)
         ? (parsed.homeScope as HomeScope)
         : DEFAULT_USER_SETTINGS.homeScope,
@@ -141,12 +177,23 @@ export class TelemetryStore extends EventTarget {
   isFetching = false;
   lastError: string | null = null;
   appliedPalette: AppliedPaletteInfo | null = null;
+  systemTheme: SystemThemeInfo | null = null;
+  wallpaperCandidates: string[] = [];
+  wallpaperBusy = false;
+  resolvedWallpaperMonitorId: string | null = null;
+  seedStatusMessage: string | null = null;
+  seedFallbackActive = false;
   hudStatus: HudStatus | null = null;
   hudBusy = false;
   hudError: string | null = null;
   readonly hostConvoId: string;
   readonly themeEngine: MonetThemeEngine;
 
+  private readonly seedProvider: DynamicSeedColorProvider;
+  private seedUnsubscribe: (() => void) | null = null;
+  private readonly wallpaperPaletteCache = new Map<string, string[]>();
+  private wallpaperReqSeq = 0;
+  private systemThemePollTick = 0;
   private pollTimer: number | null = null;
   private started = false;
   private lastHostThemeSig = '';
@@ -161,10 +208,20 @@ export class TelemetryStore extends EventTarget {
     super();
     this.settings = loadPersistedSettings();
     this.hostConvoId = resolveHostConvoId();
+    this.seedProvider = new DynamicSeedColorProvider(
+      this.settings.manualSeedHex || DEFAULT_SEED_HEX
+    );
     this.themeEngine = new MonetThemeEngine(
-      createDefaultSeedProvider(),
+      this.seedProvider,
       document.documentElement
     );
+    this.seedUnsubscribe = this.seedProvider.subscribe(() => {
+      this.appliedPalette = this.themeEngine.getLastApplied();
+      if (this.started) {
+        void this.syncHudTheme();
+      }
+      this.emitChange();
+    });
     this.syncTheme();
   }
 
@@ -187,6 +244,7 @@ export class TelemetryStore extends EventTarget {
   }
 
   private syncTheme(hostTheme?: HostThemePayload | null): void {
+    const prevDark = this.appliedPalette?.isDark ?? null;
     if (hostTheme !== undefined) {
       const sig = JSON.stringify(hostTheme ?? null);
       if (sig !== this.lastHostThemeSig) {
@@ -201,6 +259,13 @@ export class TelemetryStore extends EventTarget {
     });
     if (this.started) {
       void this.syncHudTheme();
+      if (
+        prevDark !== null &&
+        prevDark !== this.appliedPalette.isDark &&
+        this.settings.seedSource === 'wallpaper'
+      ) {
+        void this.refreshSystemTheme(false);
+      }
     }
   }
 
@@ -214,10 +279,17 @@ export class TelemetryStore extends EventTarget {
         if (this.activePage === 'settings') {
           void this.refreshHudStatus();
         }
+        if (this.settings.seedSource !== 'manual') {
+          this.systemThemePollTick += 1;
+          if (this.activePage === 'settings' || this.systemThemePollTick % 2 === 0) {
+            void this.refreshSystemTheme(false);
+          }
+        }
       }
     }, POLL_INTERVAL_MS);
     void this.refresh(false);
     void this.refreshHudStatus();
+    void this.refreshSystemTheme(false);
     void this.syncHudTheme(true);
   }
 
@@ -229,6 +301,8 @@ export class TelemetryStore extends EventTarget {
       window.clearInterval(this.pollTimer);
       this.pollTimer = null;
     }
+    this.seedUnsubscribe?.();
+    this.seedUnsubscribe = null;
     this.themeEngine.destroy();
   }
 
@@ -295,6 +369,7 @@ export class TelemetryStore extends EventTarget {
     this.emitChange();
     if (page === 'settings') {
       void this.refreshHudStatus();
+      void this.refreshSystemTheme(false);
     }
     if (
       page === 'home' &&
@@ -477,6 +552,244 @@ export class TelemetryStore extends EventTarget {
     };
     this.saveSettings();
     this.syncTheme();
+    this.emitChange();
+  }
+
+  private applyResolvedSeedHex(hex: string): void {
+    const normalized = isValidSeedHex(hex) ? normalizeSeedHex(hex) : DEFAULT_SEED_HEX;
+    const changed = this.seedProvider.setSeedColorHex(normalized);
+    if (!changed) {
+      this.appliedPalette = this.themeEngine.getLastApplied();
+    }
+  }
+
+  private pickTargetMonitor(
+    monitors: WallpaperMonitorInfo[],
+    followWindowSupported: boolean,
+    activeWindowMonitorId: string | null
+  ): WallpaperMonitorInfo {
+    const pref = this.settings.wallpaperMonitor;
+    if (pref === 'follow-window') {
+      if (followWindowSupported && activeWindowMonitorId) {
+        const active = monitors.find((m) => m.id === activeWindowMonitorId);
+        if (active) return active;
+      }
+      return monitors.find((m) => m.is_primary) ?? monitors[0];
+    }
+    if (pref === 'primary') {
+      return monitors.find((m) => m.is_primary) ?? monitors[0];
+    }
+    return (
+      monitors.find((m) => m.id === pref) ??
+      monitors.find((m) => m.is_primary) ??
+      monitors[0]
+    );
+  }
+
+  async refreshSystemTheme(force = false): Promise<void> {
+    try {
+      const isDark = this.appliedPalette?.isDark ?? false;
+      const url = `./api/theme/system?dark=${isDark ? 1 : 0}&force=${force ? 1 : 0}`;
+      const res = await apiFetch(url, { cache: 'no-store' });
+      if (!res.ok) return;
+      const payload = (await res.json()) as SystemThemeInfo;
+      this.systemTheme = payload;
+      await this.resolveActiveSeedColor(force);
+      this.emitChange();
+    } catch {
+      if (this.settings.seedSource !== 'manual') {
+        this.seedFallbackActive = true;
+        this.seedStatusMessage = '无法连接后端主题检测接口，已回退至手动种子色';
+        this.applyResolvedSeedHex(this.settings.manualSeedHex);
+        this.emitChange();
+      }
+    }
+  }
+
+  private async resolveActiveSeedColor(forceExtract = false): Promise<void> {
+    const mode = this.settings.seedSource;
+    if (mode === 'manual') {
+      this.wallpaperReqSeq += 1;
+      this.wallpaperBusy = false;
+      this.wallpaperCandidates = [];
+      this.resolvedWallpaperMonitorId = null;
+      this.seedFallbackActive = false;
+      this.seedStatusMessage = null;
+      this.applyResolvedSeedHex(this.settings.manualSeedHex);
+      return;
+    }
+
+    if (mode === 'system-accent') {
+      this.wallpaperReqSeq += 1;
+      this.wallpaperBusy = false;
+      this.wallpaperCandidates = [];
+      this.resolvedWallpaperMonitorId = null;
+      const accent = this.systemTheme?.accent;
+      if (accent?.supported && accent.hex && isValidSeedHex(accent.hex)) {
+        this.seedFallbackActive = false;
+        this.seedStatusMessage = `已同步 ${this.systemTheme?.desktop_env || '系统'} 主题色`;
+        this.applyResolvedSeedHex(accent.hex);
+      } else {
+        this.seedFallbackActive = true;
+        this.seedStatusMessage =
+          accent?.reason || '未能读取系统主题色，已回退至手动种子色';
+        this.applyResolvedSeedHex(this.settings.manualSeedHex);
+      }
+      return;
+    }
+
+    // mode === 'wallpaper'
+    const wp = this.systemTheme?.wallpaper;
+    if (!wp?.supported || !wp.monitors || wp.monitors.length === 0) {
+      this.wallpaperReqSeq += 1;
+      this.wallpaperBusy = false;
+      this.wallpaperCandidates = [];
+      this.resolvedWallpaperMonitorId = null;
+      this.seedFallbackActive = true;
+      this.seedStatusMessage =
+        wp?.reason || '未能读取桌面壁纸，已回退至手动种子色';
+      this.applyResolvedSeedHex(this.settings.manualSeedHex);
+      return;
+    }
+
+    const target = this.pickTargetMonitor(
+      wp.monitors,
+      wp.follow_window_supported,
+      wp.active_window_monitor_id
+    );
+    this.resolvedWallpaperMonitorId = target.id;
+
+    if (!target.has_image && target.solid_color && isValidSeedHex(target.solid_color)) {
+      this.wallpaperReqSeq += 1;
+      this.wallpaperBusy = false;
+      const solidHex = normalizeSeedHex(target.solid_color);
+      this.wallpaperCandidates = [solidHex];
+      this.seedFallbackActive = false;
+      this.seedStatusMessage = `已使用纯色桌面背景（${target.label}）`;
+      this.applyResolvedSeedHex(solidHex);
+      return;
+    }
+
+    const cacheKey = `${target.id}|${target.signature}|${JSON.stringify(target.crop ?? null)}`;
+    let candidates = !forceExtract
+      ? this.wallpaperPaletteCache.get(cacheKey)
+      : undefined;
+
+    if (!candidates) {
+      const reqSeq = ++this.wallpaperReqSeq;
+      this.wallpaperBusy = true;
+      this.emitChange();
+      try {
+        const res = await apiFetch(
+          `./api/theme/wallpaper?monitor=${encodeURIComponent(target.id)}&sig=${encodeURIComponent(target.signature)}`,
+          { cache: 'no-store' }
+        );
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}`);
+        }
+        const blob = await res.blob();
+        const extracted = await extractWallpaperSeedColors(blob, target.crop);
+        if (reqSeq !== this.wallpaperReqSeq || this.settings.seedSource !== 'wallpaper') {
+          return;
+        }
+        if (this.wallpaperPaletteCache.size >= 16) {
+          const oldest = this.wallpaperPaletteCache.keys().next().value;
+          if (oldest !== undefined) {
+            this.wallpaperPaletteCache.delete(oldest);
+          }
+        }
+        this.wallpaperPaletteCache.set(cacheKey, extracted);
+        candidates = extracted;
+      } catch {
+        if (reqSeq !== this.wallpaperReqSeq || this.settings.seedSource !== 'wallpaper') {
+          return;
+        }
+        this.wallpaperBusy = false;
+        this.wallpaperCandidates = [];
+        this.seedFallbackActive = true;
+        this.seedStatusMessage = '壁纸加载或取色失败，已回退至手动种子色';
+        this.applyResolvedSeedHex(this.settings.manualSeedHex);
+        this.emitChange();
+        return;
+      } finally {
+        if (reqSeq === this.wallpaperReqSeq) {
+          this.wallpaperBusy = false;
+        }
+      }
+    }
+
+    this.wallpaperCandidates = [...candidates];
+    const idx = Math.max(
+      0,
+      Math.min(candidates.length - 1, this.settings.wallpaperColorIndex)
+    );
+    this.seedFallbackActive = false;
+    this.seedStatusMessage = `已从「${target.label}」提取 Monet 候选色`;
+    this.applyResolvedSeedHex(candidates[idx] ?? DEFAULT_SEED_HEX);
+  }
+
+  setSeedSource(source: SeedSourceMode): void {
+    if (!VALID_SEED_SOURCES.has(source) || this.settings.seedSource === source) {
+      return;
+    }
+    this.settings = { ...this.settings, seedSource: source };
+    this.saveSettings();
+    if (source === 'manual') {
+      void this.resolveActiveSeedColor(false);
+      this.emitChange();
+    } else if (this.systemTheme) {
+      void this.resolveActiveSeedColor(false);
+      void this.refreshSystemTheme(false);
+      this.emitChange();
+    } else {
+      void this.refreshSystemTheme(false);
+      this.emitChange();
+    }
+  }
+
+  setManualSeedHex(rawHex: string): boolean {
+    if (!isValidSeedHex(rawHex)) {
+      return false;
+    }
+    const normalized = normalizeSeedHex(rawHex);
+    this.settings = {
+      ...this.settings,
+      manualSeedHex: normalized,
+      ...(this.settings.seedSource !== 'manual' ? { seedSource: 'manual' as const } : {}),
+    };
+    this.saveSettings();
+    void this.resolveActiveSeedColor(false);
+    this.emitChange();
+    return true;
+  }
+
+  setWallpaperMonitor(monitor: WallpaperMonitorMode): void {
+    const next = (monitor || 'follow-window').trim() || 'follow-window';
+    if (this.settings.wallpaperMonitor === next) {
+      return;
+    }
+    this.settings = {
+      ...this.settings,
+      wallpaperMonitor: next,
+      wallpaperColorIndex: 0,
+    };
+    this.saveSettings();
+    if (this.settings.seedSource === 'wallpaper') {
+      void this.resolveActiveSeedColor(false);
+    }
+    this.emitChange();
+  }
+
+  setWallpaperColorIndex(index: number): void {
+    if (!Number.isInteger(index) || index < 0 || index >= 4) {
+      return;
+    }
+    this.settings = { ...this.settings, wallpaperColorIndex: index };
+    this.saveSettings();
+    if (this.settings.seedSource === 'wallpaper' && this.wallpaperCandidates.length > 0) {
+      const clamped = Math.min(index, this.wallpaperCandidates.length - 1);
+      this.applyResolvedSeedHex(this.wallpaperCandidates[clamped]);
+    }
     this.emitChange();
   }
 

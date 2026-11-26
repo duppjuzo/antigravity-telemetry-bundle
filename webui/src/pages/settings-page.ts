@@ -3,16 +3,25 @@ import { customElement, state } from 'lit/decorators.js';
 import { telemetryStore } from '../state/store';
 import {
   MONET_VARIANT_OPTIONS,
+  type AppliedPaletteInfo,
   type MonetSpecVersion,
   type MonetVariantId,
   type ThemeMode,
 } from '../theme/monet-engine';
+import {
+  DEFAULT_SEED_HEX,
+  PRESET_SEED_COLORS,
+  isValidSeedHex,
+  normalizeSeedHex,
+} from '../theme/seed-provider';
 import type { MdSwitch } from '@material/web/switch/switch.js';
 import type {
   HomeScope,
   HudStatus,
+  SeedSourceMode,
   SessionIndexItem,
   StatsResponse,
+  SystemThemeInfo,
   UserSettings,
 } from '../types/telemetry';
 import {
@@ -42,6 +51,31 @@ const HOME_SCOPE_OPTIONS: ReadonlyArray<{ value: HomeScope; label: string }> = [
   { value: 'session', label: '单个会话' },
   { value: 'global', label: '全局' },
 ];
+
+const SEED_SOURCE_OPTIONS: ReadonlyArray<{ value: SeedSourceMode; label: string }> = [
+  { value: 'manual', label: '手动指定' },
+  { value: 'system-accent', label: '系统主题色' },
+  { value: 'wallpaper', label: '桌面壁纸取色' },
+];
+
+function formatAccentSourceLabel(source: string | null | undefined): string {
+  switch (source) {
+    case 'windows-dwm':
+      return 'Windows DWM';
+    case 'windows-explorer':
+      return 'Windows Explorer';
+    case 'xdg-portal':
+      return 'XDG Portal';
+    case 'kdeglobals':
+      return 'KDE Plasma';
+    case 'gnome-gsettings':
+      return 'GNOME Accent';
+    case 'gnome-yaru':
+      return 'Ubuntu Yaru';
+    default:
+      return source || '系统接口';
+  }
+}
 
 @customElement('settings-page')
 export class SettingsPage extends LitElement {
@@ -277,6 +311,196 @@ export class SettingsPage extends LitElement {
         align-items: center;
       }
 
+      .seed-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 3px 10px 3px 6px;
+        border-radius: var(--tm-radius-full, 9999px);
+        background: var(--md-sys-color-surface-container-high);
+        border: 1px solid var(--md-sys-color-outline-variant);
+        font-family: var(--tm-font-mono);
+        font-size: 11.5px;
+        font-weight: 600;
+        color: var(--md-sys-color-on-surface);
+      }
+
+      .seed-pill-dot {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        border: 1px solid color-mix(in srgb, var(--md-sys-color-on-surface) 22%, transparent);
+        flex-shrink: 0;
+      }
+
+      .seed-subpanel {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        margin: 4px 0 10px;
+        padding: 12px;
+        border-radius: var(--tm-radius-sm, 12px);
+        background: var(--md-sys-color-surface-container);
+        border: 1px solid var(--md-sys-color-outline-variant);
+      }
+
+      .seed-manual-controls {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .color-picker-wrap {
+        position: relative;
+        width: 38px;
+        height: 38px;
+        border-radius: 50%;
+        overflow: hidden;
+        border: 2px solid var(--md-sys-color-outline);
+        flex-shrink: 0;
+        cursor: pointer;
+      }
+
+      .color-picker-input {
+        position: absolute;
+        inset: -6px;
+        width: calc(100% + 12px);
+        height: calc(100% + 12px);
+        border: 0;
+        padding: 0;
+        background: transparent;
+        cursor: pointer;
+      }
+
+      .hex-field {
+        flex: 0 1 150px;
+        min-width: 128px;
+        --md-outlined-field-container-shape: var(--tm-radius-sm, 12px);
+        --md-outlined-text-field-top-space: 8px;
+        --md-outlined-text-field-bottom-space: 8px;
+      }
+
+      .swatch-row {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .swatch-btn {
+        position: relative;
+        width: 30px;
+        height: 30px;
+        border-radius: 50%;
+        border: 2px solid color-mix(in srgb, var(--md-sys-color-on-surface) 18%, transparent);
+        padding: 0;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        transition: transform 0.14s ease, box-shadow 0.14s ease;
+      }
+
+      .swatch-btn:hover {
+        transform: scale(1.08);
+      }
+
+      .swatch-btn.active {
+        border-color: var(--md-sys-color-primary);
+        box-shadow: 0 0 0 2px var(--md-sys-color-surface-container), 0 0 0 4px var(--md-sys-color-primary);
+      }
+
+      .swatch-btn md-icon {
+        --md-icon-size: 16px;
+        filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.55));
+        color: #ffffff;
+      }
+
+      .wallpaper-swatch-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        padding: 5px 10px 5px 6px;
+        border-radius: var(--tm-radius-full, 9999px);
+        border: 1px solid var(--md-sys-color-outline-variant);
+        background: var(--md-sys-color-surface-container-low);
+        color: var(--md-sys-color-on-surface);
+        font-family: var(--tm-font-mono);
+        font-size: 11.5px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: border-color 0.14s ease, background 0.14s ease;
+      }
+
+      .wallpaper-swatch-btn:hover {
+        background: var(--md-sys-color-surface-container-high);
+      }
+
+      .wallpaper-swatch-btn.active {
+        border-color: var(--md-sys-color-primary);
+        background: var(--md-sys-color-secondary-container);
+        color: var(--md-sys-color-on-secondary-container);
+      }
+
+      .wallpaper-swatch-dot {
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        border: 1px solid color-mix(in srgb, var(--md-sys-color-on-surface) 22%, transparent);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+      }
+
+      .wallpaper-swatch-dot md-icon {
+        --md-icon-size: 12px;
+        color: #ffffff;
+        filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.6));
+      }
+
+      .seed-status-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+
+      .seed-status-meta {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+        flex-wrap: wrap;
+        font-size: 12.5px;
+        color: var(--md-sys-color-on-surface-variant);
+      }
+
+      .seed-warning {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        padding: 8px 10px;
+        border-radius: var(--tm-radius-xs, 8px);
+        background: var(--md-sys-color-error-container);
+        color: var(--md-sys-color-on-error-container);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .seed-warning md-icon {
+        --md-icon-size: 16px;
+        flex-shrink: 0;
+        margin-top: 1px;
+      }
+
+      .sub-label {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--md-sys-color-on-surface-variant);
+      }
+
       @container (width < 480px) {
         .setting-row {
           flex-direction: column;
@@ -300,6 +524,15 @@ export class SettingsPage extends LitElement {
 
   @state() private settings: UserSettings = telemetryStore.settings;
   @state() private data: StatsResponse | null = telemetryStore.data;
+  @state() private appliedPalette: AppliedPaletteInfo | null = telemetryStore.appliedPalette;
+  @state() private systemTheme: SystemThemeInfo | null = telemetryStore.systemTheme;
+  @state() private wallpaperCandidates: string[] = telemetryStore.wallpaperCandidates;
+  @state() private wallpaperBusy = telemetryStore.wallpaperBusy;
+  @state() private resolvedWallpaperMonitorId: string | null =
+    telemetryStore.resolvedWallpaperMonitorId;
+  @state() private seedStatusMessage: string | null = telemetryStore.seedStatusMessage;
+  @state() private seedFallbackActive = telemetryStore.seedFallbackActive;
+  @state() private hexDraft = telemetryStore.settings.manualSeedHex;
   @state() private hudStatus: HudStatus | null = telemetryStore.hudStatus;
   @state() private hudBusy = telemetryStore.hudBusy;
   @state() private hudError: string | null = telemetryStore.hudError;
@@ -312,6 +545,7 @@ export class SettingsPage extends LitElement {
     this.syncFromStore();
     this.unsubscribe = telemetryStore.subscribe(() => this.syncFromStore());
     void telemetryStore.refreshHudStatus();
+    void telemetryStore.refreshSystemTheme(false);
   }
 
   disconnectedCallback(): void {
@@ -320,8 +554,19 @@ export class SettingsPage extends LitElement {
   }
 
   private syncFromStore(): void {
+    const prevManual = this.settings.manualSeedHex;
     this.settings = telemetryStore.settings;
     this.data = telemetryStore.data;
+    this.appliedPalette = telemetryStore.appliedPalette;
+    this.systemTheme = telemetryStore.systemTheme;
+    this.wallpaperCandidates = telemetryStore.wallpaperCandidates;
+    this.wallpaperBusy = telemetryStore.wallpaperBusy;
+    this.resolvedWallpaperMonitorId = telemetryStore.resolvedWallpaperMonitorId;
+    this.seedStatusMessage = telemetryStore.seedStatusMessage;
+    this.seedFallbackActive = telemetryStore.seedFallbackActive;
+    if (prevManual !== this.settings.manualSeedHex) {
+      this.hexDraft = this.settings.manualSeedHex;
+    }
     this.hudStatus = telemetryStore.hudStatus;
     this.hudBusy = telemetryStore.hudBusy;
     this.hudError = telemetryStore.hudError;
@@ -354,6 +599,48 @@ export class SettingsPage extends LitElement {
   private handleSpecVersionChange(e: Event): void {
     const value = (e.target as HTMLSelectElement).value as MonetSpecVersion;
     telemetryStore.setThemeConfig({ specVersion: value });
+  }
+
+  private handleSeedSourceChange(e: Event): void {
+    const value = (e.target as HTMLSelectElement).value as SeedSourceMode;
+    telemetryStore.setSeedSource(value);
+  }
+
+  private handleManualColorInput(e: Event): void {
+    const val = (e.target as HTMLInputElement).value;
+    if (isValidSeedHex(val)) {
+      const normalized = normalizeSeedHex(val);
+      this.hexDraft = normalized;
+      telemetryStore.setManualSeedHex(normalized);
+    }
+  }
+
+  private handleManualHexTextInput(e: Event): void {
+    const val = (e.target as HTMLInputElement).value ?? '';
+    this.hexDraft = val;
+    const trimmed = val.trim();
+    if (/^#?[0-9a-fA-F]{6}$/.test(trimmed)) {
+      telemetryStore.setManualSeedHex(trimmed);
+    }
+  }
+
+  private handleManualHexBlur(): void {
+    if (isValidSeedHex(this.hexDraft)) {
+      const normalized = normalizeSeedHex(this.hexDraft);
+      this.hexDraft = normalized;
+      telemetryStore.setManualSeedHex(normalized);
+    } else {
+      this.hexDraft = this.settings.manualSeedHex;
+    }
+  }
+
+  private handleRefreshSystemTheme(): void {
+    void telemetryStore.refreshSystemTheme(true);
+  }
+
+  private handleWallpaperMonitorChange(e: Event): void {
+    const value = (e.target as HTMLSelectElement).value;
+    telemetryStore.setWallpaperMonitor(value);
   }
 
   private handleHomeScopeChange(e: Event): void {
@@ -410,10 +697,59 @@ export class SettingsPage extends LitElement {
               ${renderMdIcon('palette')}
               <h2 class="section-title">外观与 Monet 配色</h2>
             </div>
+            <span class="seed-pill" title="当前生效种子色">
+              <span
+                class="seed-pill-dot"
+                style="background:${this.appliedPalette?.seedHex || this.settings.manualSeedHex || DEFAULT_SEED_HEX};"
+              ></span>
+              <span>${this.appliedPalette?.seedHex || this.settings.manualSeedHex || DEFAULT_SEED_HEX}</span>
+            </span>
           </div>
 
           <md-list class="settings-list">
-            <!-- 1. 主题模式 -->
+            <!-- 1. 种子色来源 -->
+            <div class="setting-row">
+              <div class="setting-info">
+                <md-list-item>
+                  ${renderMdIcon(
+                    this.settings.seedSource === 'wallpaper'
+                      ? 'wallpaper'
+                      : this.settings.seedSource === 'system-accent'
+                        ? 'desktop_windows'
+                        : 'colorize',
+                    'start'
+                  )}
+                  <span slot="headline">种子色来源</span>
+                  <span slot="supporting-text">
+                    手动选色、跟随系统主题色或从桌面壁纸提取 Monet 色板
+                  </span>
+                </md-list-item>
+              </div>
+              <md-outlined-select
+                class="setting-select"
+                aria-label="种子色来源"
+                menu-positioning="popover"
+                .value=${this.settings.seedSource}
+                @change=${this.handleSeedSourceChange}
+              >
+                ${SEED_SOURCE_OPTIONS.map(
+                  (opt) => html`
+                    <md-select-option
+                      value=${opt.value}
+                      ?selected=${this.settings.seedSource === opt.value}
+                    >
+                      <div slot="headline">${opt.label}</div>
+                    </md-select-option>
+                  `
+                )}
+              </md-outlined-select>
+            </div>
+
+            ${this.renderSeedSourceControls()}
+
+            <md-divider></md-divider>
+
+            <!-- 2. 主题模式 -->
             <div class="setting-row">
               <div class="setting-info">
                 <md-list-item>
@@ -700,6 +1036,214 @@ export class SettingsPage extends LitElement {
                 </md-list>
               `}
         </md-outlined-card>
+      </div>
+    `;
+  }
+
+  private renderSeedSourceControls() {
+    const mode = this.settings.seedSource;
+    if (mode === 'manual') {
+      const currentHex = this.settings.manualSeedHex || DEFAULT_SEED_HEX;
+      return html`
+        <div class="seed-subpanel">
+          <div class="seed-manual-controls">
+            <label class="color-picker-wrap" title="打开系统取色器" style="background:${currentHex};">
+              <input
+                class="color-picker-input"
+                type="color"
+                aria-label="选择种子色"
+                .value=${currentHex}
+                @input=${this.handleManualColorInput}
+              />
+            </label>
+            <md-outlined-text-field
+              class="hex-field"
+              label="种子色 HEX"
+              placeholder="#ADD8E6"
+              aria-label="种子色 HEX"
+              maxlength="7"
+              .value=${this.hexDraft}
+              @input=${this.handleManualHexTextInput}
+              @blur=${this.handleManualHexBlur}
+            ></md-outlined-text-field>
+          </div>
+          <div class="swatch-row" role="group" aria-label="预设种子色">
+            ${PRESET_SEED_COLORS.map((preset) => {
+              const isSelected = preset.hex === currentHex;
+              return html`
+                <button
+                  type="button"
+                  class="swatch-btn ${isSelected ? 'active' : ''}"
+                  style="background:${preset.hex};"
+                  title="${preset.label} (${preset.hex})"
+                  aria-label="${preset.label} ${preset.hex}"
+                  aria-pressed=${isSelected ? 'true' : 'false'}
+                  @click=${() => telemetryStore.setManualSeedHex(preset.hex)}
+                >
+                  ${isSelected ? renderMdIcon('check') : nothing}
+                </button>
+              `;
+            })}
+          </div>
+        </div>
+      `;
+    }
+
+    if (mode === 'system-accent') {
+      const accent = this.systemTheme?.accent;
+      const accentHex = accent?.supported && accent.hex ? accent.hex : null;
+      return html`
+        <div class="seed-subpanel">
+          <div class="seed-status-row">
+            <div class="seed-status-meta">
+              ${accentHex
+                ? html`
+                    <span class="seed-pill">
+                      <span class="seed-pill-dot" style="background:${accentHex};"></span>
+                      <span>${accentHex}</span>
+                    </span>
+                    <span>
+                      来源：${formatAccentSourceLabel(accent?.source)}
+                      (${this.systemTheme?.desktop_env || 'System'})
+                    </span>
+                  `
+                : html`<span>正在检测系统主题色...</span>`}
+            </div>
+            <md-icon-button
+              aria-label="重新读取系统主题色"
+              title="重新读取系统主题色"
+              @click=${this.handleRefreshSystemTheme}
+            >
+              ${renderMdIcon('refresh')}
+            </md-icon-button>
+          </div>
+          ${this.seedFallbackActive && this.seedStatusMessage
+            ? html`
+                <div class="seed-warning" role="status">
+                  ${renderMdIcon('error_outline')}
+                  <span>${this.seedStatusMessage}</span>
+                </div>
+              `
+            : nothing}
+        </div>
+      `;
+    }
+
+    // mode === 'wallpaper'
+    const wp = this.systemTheme?.wallpaper;
+    const monitors = wp?.monitors ?? [];
+    const followSupported = Boolean(wp?.follow_window_supported);
+    const activeMonitorObj = this.resolvedWallpaperMonitorId
+      ? monitors.find((m) => m.id === this.resolvedWallpaperMonitorId) ?? null
+      : null;
+
+    const monitorOptions: Array<{ value: string; label: string }> = [];
+    if (followSupported) {
+      monitorOptions.push({
+        value: 'follow-window',
+        label: '跟随 Antigravity 窗口所在屏',
+      });
+    }
+    monitorOptions.push({ value: 'primary', label: '主显示器' });
+    for (const m of monitors) {
+      monitorOptions.push({ value: m.id, label: m.label });
+    }
+
+    const selectedMonitorPref = monitorOptions.some(
+      (o) => o.value === this.settings.wallpaperMonitor
+    )
+      ? this.settings.wallpaperMonitor
+      : monitorOptions[0]?.value || 'primary';
+
+    const clampedIdx =
+      this.wallpaperCandidates.length > 0
+        ? Math.min(
+            this.settings.wallpaperColorIndex,
+            this.wallpaperCandidates.length - 1
+          )
+        : 0;
+
+    return html`
+      <div class="seed-subpanel">
+        <div class="setting-row" style="padding:0;">
+          <div class="setting-info">
+            <span class="sub-label">目标显示器</span>
+            ${activeMonitorObj
+              ? html`
+                  <div style="font-size:11.5px;color:var(--md-sys-color-on-surface-variant);margin-top:2px;">
+                    当前生效：${activeMonitorObj.label}${wp?.position === 'span' ? ' · 跨区裁剪' : ''}
+                  </div>
+                `
+              : nothing}
+          </div>
+          <md-outlined-select
+            class="setting-select"
+            aria-label="目标显示器"
+            menu-positioning="popover"
+            ?disabled=${monitors.length === 0}
+            .value=${selectedMonitorPref}
+            @change=${this.handleWallpaperMonitorChange}
+          >
+            ${monitorOptions.map(
+              (opt) => html`
+                <md-select-option
+                  value=${opt.value}
+                  ?selected=${selectedMonitorPref === opt.value}
+                >
+                  <div slot="headline">${opt.label}</div>
+                </md-select-option>
+              `
+            )}
+          </md-outlined-select>
+        </div>
+
+        <div class="seed-status-row">
+          <span class="sub-label">
+            壁纸提取候选色（Top 4）
+            ${this.wallpaperBusy ? ' · 提取中...' : ''}
+          </span>
+          <md-icon-button
+            aria-label="重新读取壁纸并取色"
+            title="重新读取壁纸并取色"
+            ?disabled=${this.wallpaperBusy}
+            @click=${this.handleRefreshSystemTheme}
+          >
+            ${renderMdIcon('refresh')}
+          </md-icon-button>
+        </div>
+
+        ${this.wallpaperCandidates.length > 0
+          ? html`
+              <div class="swatch-row" role="group" aria-label="壁纸提取候选色">
+                ${this.wallpaperCandidates.map((hex, idx) => {
+                  const isSelected = idx === clampedIdx;
+                  return html`
+                    <button
+                      type="button"
+                      class="wallpaper-swatch-btn ${isSelected ? 'active' : ''}"
+                      title="候选色 ${idx + 1}: ${hex}"
+                      aria-pressed=${isSelected ? 'true' : 'false'}
+                      @click=${() => telemetryStore.setWallpaperColorIndex(idx)}
+                    >
+                      <span class="wallpaper-swatch-dot" style="background:${hex};">
+                        ${isSelected ? renderMdIcon('check') : nothing}
+                      </span>
+                      <span>${hex}</span>
+                    </button>
+                  `;
+                })}
+              </div>
+            `
+          : nothing}
+
+        ${this.seedFallbackActive && this.seedStatusMessage
+          ? html`
+              <div class="seed-warning" role="status">
+                ${renderMdIcon('error_outline')}
+                <span>${this.seedStatusMessage}</span>
+              </div>
+            `
+          : nothing}
       </div>
     `;
   }

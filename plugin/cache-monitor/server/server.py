@@ -28,6 +28,7 @@ if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
 import collector  # noqa: E402
+import system_theme  # noqa: E402
 
 VERSION = "1.2.0"
 DASHBOARD_HTML = os.path.join(BASE_DIR, "web_dashboard.html")
@@ -632,6 +633,45 @@ class TelemetryHandler(BaseHTTPRequestHandler):
 
         if path == "/api/hud/status":
             self._send_json(200, get_hud_status())
+            return
+
+        if path == "/api/theme/system":
+            qs = urllib.parse.parse_qs(parsed.query)
+            raw_dark = qs.get("dark", [None])[0]
+            if raw_dark in ("1", "true", "yes"):
+                prefer_dark: bool | None = True
+            elif raw_dark in ("0", "false", "no"):
+                prefer_dark = False
+            else:
+                prefer_dark = None
+            force = qs.get("force", ["0"])[0] in ("1", "true", "yes")
+            try:
+                self._send_json(200, system_theme.get_system_theme_info(prefer_dark=prefer_dark, force=force))
+            except Exception as exc:
+                self._send_json(500, {"error": str(exc)})
+            return
+
+        if path == "/api/theme/wallpaper":
+            qs = urllib.parse.parse_qs(parsed.query)
+            monitor_id = (qs.get("monitor", [""])[0] or "").strip()
+            wp_path, mime_type = system_theme.resolve_wallpaper_file(monitor_id)
+            if not wp_path or not mime_type:
+                self._send_json(404, {"error": "Wallpaper not found"})
+                return
+            try:
+                with open(wp_path, "rb") as f:
+                    body = f.read()
+            except OSError:
+                self._send_json(404, {"error": "Wallpaper not found"})
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", mime_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            self._safe_write(body)
             return
 
         if path == "/api/hud":
