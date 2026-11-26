@@ -22,7 +22,7 @@ if BASE_DIR not in sys.path:
 
 import collector  # noqa: E402
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 DASHBOARD_HTML = os.path.join(BASE_DIR, "web_dashboard.html")
 DEMO_MODE = False
 PRIMARY_HOST = "127.0.0.1"

@@ -23,7 +23,7 @@ import urllib.request
 import webbrowser
 from pathlib import Path
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 BUNDLE_ROOT = Path(__file__).resolve().parent
 PLUGIN_SRC = BUNDLE_ROOT / "plugin" / "cache-monitor"
 PLUGIN_NAME = "cache-monitor"

@@ -1,7 +1,7 @@
 {
   "name": "cache-monitor",
   "displayName": "Token Cache Monitor",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Self-contained Antigravity App aux_pane Telemetry Dashboard sidecar and cache-stats skill featuring a sticky live summary bar (TTFT, cache hit, TPS, total tokens, context window % ring), auto-tracking latest session with switcher, and tabbed category views.",
   "logo": "assets/logo.svg",
   "suggestedPrompts": [
