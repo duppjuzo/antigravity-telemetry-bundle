@@ -21,6 +21,12 @@ export class StepsPage extends LitElement {
     chartStyles,
     tableStyles,
     css`
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+
       :host {
         display: block;
         container-type: inline-size;

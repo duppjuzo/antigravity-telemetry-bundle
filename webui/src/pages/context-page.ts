@@ -36,6 +36,12 @@ export class ContextPage extends LitElement {
   static styles = [
     chartStyles,
     css`
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+
       :host {
         display: block;
         container-type: inline-size;

@@ -32,6 +32,12 @@ export class HomePage extends LitElement {
     chartStyles,
     homeCardStyles,
     css`
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+
       :host {
         display: block;
       }
@@ -67,7 +73,8 @@ export class HomePage extends LitElement {
       }
 
       .home-card {
-        display: block;
+        display: flex;
+        flex-direction: column;
         width: 100%;
         height: 100%;
         --md-elevated-card-container-shape: var(--tm-radius-md, 16px);
@@ -79,10 +86,12 @@ export class HomePage extends LitElement {
 
       .card-surface {
         position: relative;
+        flex: 1 1 auto;
         display: flex;
         flex-direction: column;
         gap: 12px;
-        height: 100%;
+        width: 100%;
+        min-height: 100%;
         padding: 16px;
         border-radius: var(--tm-radius-md, 16px);
         overflow: hidden;

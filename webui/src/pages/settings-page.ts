@@ -45,6 +45,12 @@ const HOME_SCOPE_OPTIONS: ReadonlyArray<{ value: HomeScope; label: string }> = [
 export class SettingsPage extends LitElement {
   static styles = [
     css`
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+
       :host {
         display: block;
         container-type: inline-size;

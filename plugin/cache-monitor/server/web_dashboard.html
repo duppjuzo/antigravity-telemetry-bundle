@@ -2369,6 +2369,12 @@
         </main>
       </div>
     `}};lt.styles=S`
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+    }
+
     :host {
       display: block;
       min-height: 100vh;
@@ -3498,6 +3504,12 @@
 
       ${this.renderAddCardDialog()}
     `}};ve.styles=[Dr,$c,S`
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+
       :host {
         display: block;
       }
@@ -3533,7 +3545,8 @@
       }
 
       .home-card {
-        display: block;
+        display: flex;
+        flex-direction: column;
         width: 100%;
         height: 100%;
         --md-elevated-card-container-shape: var(--tm-radius-md, 16px);
@@ -3545,10 +3558,12 @@
 
       .card-surface {
         position: relative;
+        flex: 1 1 auto;
         display: flex;
         flex-direction: column;
         gap: 12px;
-        height: 100%;
+        width: 100%;
+        min-height: 100%;
         padding: 16px;
         border-radius: var(--tm-radius-md, 16px);
         overflow: hidden;
@@ -3947,6 +3962,12 @@
         </md-elevated-card>
       </div>
     `}};Br.styles=[Dr,S`
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+
       :host {
         display: block;
         container-type: inline-size;
@@ -4476,6 +4497,12 @@
             `:h`<div class="empty-box">暂无单步性能数据</div>`}
       </md-elevated-card>
     `}};sr.styles=[Dr,Ha,S`
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+
       :host {
         display: block;
         container-type: inline-size;
@@ -4655,6 +4682,12 @@
             `:h`<div class="empty-box">暂无模型统计数据</div>`}
       </md-elevated-card>
     `}};_t.styles=[Ha,S`
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+
       :host {
         display: block;
         container-type: inline-size;
@@ -4890,6 +4923,12 @@ TTFT: ${le(r.avg_ttft_sec)} | Stream: ${Le(r.avg_stream_tps)}`;return h`
         </md-outlined-card>
       </div>
     `}};Mt.styles=[Dr,S`
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+
       :host {
         display: block;
         container-type: inline-size;
@@ -5295,6 +5334,12 @@ ${e.project||""} (${e.convo_id})`}
             `}
       </md-outlined-card>
     `}};Lt.styles=[Ha,S`
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+
       :host {
         display: block;
         container-type: inline-size;
@@ -5737,6 +5782,12 @@ ${e.project||""} (${e.convo_id})`}
         </md-outlined-card>
       </div>
     `}};Dt.styles=[S`
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+
       :host {
         display: block;
         container-type: inline-size;

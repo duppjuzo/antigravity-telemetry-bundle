@@ -19,6 +19,12 @@ export class RecentSessionsPage extends LitElement {
   static styles = [
     tableStyles,
     css`
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+
       :host {
         display: block;
         container-type: inline-size;

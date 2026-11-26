@@ -23,6 +23,12 @@ const NAV_ITEMS: NavEntry[] = [
 @customElement('telemetry-app')
 export class TelemetryApp extends LitElement {
   static styles = css`
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+    }
+
     :host {
       display: block;
       min-height: 100vh;
