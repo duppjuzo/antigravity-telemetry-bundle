@@ -14,6 +14,7 @@ import {
   type HomeCardId,
   type HomeScope,
   type HourlyEntry,
+  type HudStatus,
   type ModelScope,
   type PageId,
   type StatsResponse,
@@ -140,12 +141,16 @@ export class TelemetryStore extends EventTarget {
   isFetching = false;
   lastError: string | null = null;
   appliedPalette: AppliedPaletteInfo | null = null;
+  hudStatus: HudStatus | null = null;
+  hudBusy = false;
+  hudError: string | null = null;
   readonly hostConvoId: string;
   readonly themeEngine: MonetThemeEngine;
 
   private pollTimer: number | null = null;
   private started = false;
   private lastHostThemeSig = '';
+  private lastHudThemeSig = '';
   private readonly onVisibilityChange = (): void => {
     if (!document.hidden && this.settings.liveEnabled) {
       void this.refresh(false);
@@ -194,6 +199,9 @@ export class TelemetryStore extends EventTarget {
       variant: this.settings.variant,
       specVersion: this.settings.specVersion,
     });
+    if (this.started) {
+      void this.syncHudTheme();
+    }
   }
 
   start(): void {
@@ -203,9 +211,14 @@ export class TelemetryStore extends EventTarget {
     this.pollTimer = window.setInterval(() => {
       if (this.settings.liveEnabled && !document.hidden) {
         void this.refresh(false);
+        if (this.activePage === 'settings') {
+          void this.refreshHudStatus();
+        }
       }
     }, POLL_INTERVAL_MS);
     void this.refresh(false);
+    void this.refreshHudStatus();
+    void this.syncHudTheme(true);
   }
 
   destroy(): void {
@@ -280,6 +293,9 @@ export class TelemetryStore extends EventTarget {
     this.activePage = page;
     this.drawerOpen = false;
     this.emitChange();
+    if (page === 'settings') {
+      void this.refreshHudStatus();
+    }
     if (
       page === 'home' &&
       this.globalRange !== 'today' &&
@@ -288,6 +304,110 @@ export class TelemetryStore extends EventTarget {
       this.todayHourly.length === 0
     ) {
       void this.refresh(false);
+    }
+  }
+
+  async syncHudTheme(force = false): Promise<void> {
+    try {
+      const payload = this.themeEngine.exportHudThemePayload();
+      const sig = JSON.stringify(payload);
+      if (!force && sig === this.lastHudThemeSig) {
+        return;
+      }
+      this.lastHudThemeSig = sig;
+      await apiFetch('./api/hud/theme', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: sig,
+      });
+    } catch {
+      // Ignore HUD theme sync errors if server doesn't support it
+    }
+  }
+
+  async refreshHudStatus(): Promise<void> {
+    try {
+      const res = await apiFetch('./api/hud/status', { cache: 'no-store' });
+      if (!res.ok) return;
+      const status = (await res.json()) as HudStatus;
+      this.hudStatus = status;
+      this.emitChange();
+    } catch {
+      // Ignore transient polling errors
+    }
+  }
+
+  async setHudEnabled(enabled: boolean): Promise<void> {
+    if (this.hudBusy) return;
+    this.hudBusy = true;
+    this.hudError = null;
+    this.emitChange();
+    try {
+      const res = await apiFetch('./api/hud/control', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled }),
+      });
+      const payload = (await res.json()) as HudStatus;
+      this.hudStatus = payload;
+      if (!res.ok) {
+        this.hudError = payload.error || `HTTP ${res.status}`;
+      } else if (enabled && payload.running) {
+        void this.syncHudTheme(true);
+      }
+    } catch (err) {
+      this.hudError = err instanceof Error ? err.message : String(err);
+    } finally {
+      this.hudBusy = false;
+      this.emitChange();
+    }
+  }
+
+  async setHudAlwaysOnTop(alwaysOnTop: boolean): Promise<void> {
+    if (this.hudBusy) return;
+    this.hudBusy = true;
+    this.hudError = null;
+    this.emitChange();
+    try {
+      const res = await apiFetch('./api/hud/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ always_on_top: alwaysOnTop }),
+      });
+      const payload = (await res.json()) as HudStatus;
+      this.hudStatus = payload;
+      if (!res.ok) {
+        this.hudError = payload.error || `HTTP ${res.status}`;
+      }
+    } catch (err) {
+      this.hudError = err instanceof Error ? err.message : String(err);
+    } finally {
+      this.hudBusy = false;
+      this.emitChange();
+    }
+  }
+
+  async resetHudPosition(): Promise<void> {
+    if (this.hudBusy) return;
+    this.hudBusy = true;
+    this.hudError = null;
+    this.emitChange();
+    try {
+      const res = await apiFetch('./api/hud/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reset_position: true }),
+      });
+      const payload = (await res.json()) as HudStatus;
+      this.hudStatus = payload;
+      if (!res.ok) {
+        this.hudError = payload.error || `HTTP ${res.status}`;
+      }
+    } catch (err) {
+      this.hudError = err instanceof Error ? err.message : String(err);
+    } finally {
+      this.hudBusy = false;
+      this.emitChange();
     }
   }
 

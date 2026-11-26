@@ -378,6 +378,17 @@ export interface UserSettings {
   homeCards: HomeCardId[];
 }
 
+export interface HudStatus {
+  supported: boolean;
+  reason?: string;
+  running: boolean;
+  pid?: number | null;
+  always_on_top: boolean;
+  theme?: 'dark' | 'light';
+  has_monet_palette?: boolean;
+  error?: string;
+}
+
 export const DEFAULT_USER_SETTINGS: UserSettings = {
   themeMode: 'follow-gui',
   variant: 'tonal_spot',

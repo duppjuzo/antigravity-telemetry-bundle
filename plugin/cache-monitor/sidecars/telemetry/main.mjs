@@ -21,6 +21,11 @@ function shutdown(code = 0) {
   stopping = true;
   if (child && !child.killed) {
     try {
+      child.stdin?.end();
+    } catch {
+      // Ignore
+    }
+    try {
       child.kill("SIGTERM");
     } catch {
       // Ignore already exited child
@@ -183,9 +188,9 @@ function runServer(py) {
     const keep = (chunk) => {
       output = (output + chunk.toString()).slice(-MAX_OUTPUT_CHARS);
     };
-    const proc = spawn(py.cmd, [...py.prefixArgs, SERVER_SCRIPT, "--port", String(PORT)], {
+    const proc = spawn(py.cmd, [...py.prefixArgs, SERVER_SCRIPT, "--port", String(PORT), "--watch-stdin"], {
       cwd: path.dirname(SERVER_SCRIPT),
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
       env: {
         ...process.env,

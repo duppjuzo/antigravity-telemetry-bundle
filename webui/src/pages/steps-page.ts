@@ -177,7 +177,7 @@ export class StepsPage extends LitElement {
           ${fmtCompact(st.output_tokens)} / ${fmtCompact(st.thinking_tokens)}
         </td>
         <td
-          data-label="Ctx %"
+          data-label="上下文 %"
           class="mono-cell"
           style="color:${ctxToneVar(st.ctx_pct)};font-weight:600;"
         >
@@ -245,7 +245,7 @@ export class StepsPage extends LitElement {
                       <th scope="col">Fresh In</th>
                       <th scope="col">Cached</th>
                       <th scope="col">Out / Think</th>
-                      <th scope="col">Ctx %</th>
+                      <th scope="col">上下文 %</th>
                     </tr>
                   </thead>
                   <tbody>

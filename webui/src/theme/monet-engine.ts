@@ -60,6 +60,40 @@ export interface AppliedPaletteInfo {
   variant: MonetVariantId;
 }
 
+export interface HudM3Palette {
+  surface_container_low: string;
+  surface_container: string;
+  surface_container_high: string;
+  surface_container_highest: string;
+  on_surface: string;
+  on_surface_variant: string;
+  outline: string;
+  outline_variant: string;
+  primary: string;
+  on_primary: string;
+  primary_container: string;
+  on_primary_container: string;
+  secondary_container: string;
+  on_secondary_container: string;
+  tertiary: string;
+  tertiary_container: string;
+  on_tertiary_container: string;
+  error: string;
+  error_container: string;
+  on_error_container: string;
+}
+
+export interface HudThemeSyncPayload {
+  theme: 'dark' | 'light';
+  palettes: {
+    dark: HudM3Palette;
+    light: HudM3Palette;
+  };
+  variant: MonetVariantId;
+  spec_version: MonetSpecVersion;
+  seed_hex: string;
+}
+
 type SchemeConstructor = new (
   sourceColorHct: Hct,
   isDark: boolean,
@@ -300,6 +334,67 @@ export class MonetThemeEngine {
 
   getLastApplied(): AppliedPaletteInfo | null {
     return this.lastApplied ? { ...this.lastApplied } : null;
+  }
+
+  exportHudThemePayload(): HudThemeSyncPayload {
+    const seedHex = this.seedProvider.getSeedColorHex();
+    const isDark = this.resolveIsDark();
+    const contrastLevel = this.resolveContrastLevel();
+    const variantMeta = VARIANT_TABLE[this.config.variant] ?? VARIANT_TABLE.tonal_spot;
+    const requestedSpecVersion = this.config.specVersion;
+    const sourceHct = Hct.fromInt(argbFromHex(seedHex));
+
+    const darkScheme = new variantMeta.SchemeClass(
+      sourceHct,
+      true,
+      contrastLevel,
+      requestedSpecVersion
+    );
+    const lightScheme = new variantMeta.SchemeClass(
+      sourceHct,
+      false,
+      contrastLevel,
+      requestedSpecVersion
+    );
+
+    return {
+      theme: isDark ? 'dark' : 'light',
+      palettes: {
+        dark: this.extractHudPalette(darkScheme),
+        light: this.extractHudPalette(lightScheme),
+      },
+      variant: variantMeta.option.id,
+      spec_version: darkScheme.specVersion,
+      seed_hex: seedHex,
+    };
+  }
+
+  private extractHudPalette(scheme: DynamicScheme): HudM3Palette {
+    const c = this.colors;
+    const hex = (dc: ReturnType<MaterialDynamicColors['primary']>) =>
+      hexFromArgb(dc.getArgb(scheme));
+    return {
+      surface_container_low: hex(c.surfaceContainerLow()),
+      surface_container: hex(c.surfaceContainer()),
+      surface_container_high: hex(c.surfaceContainerHigh()),
+      surface_container_highest: hex(c.surfaceContainerHighest()),
+      on_surface: hex(c.onSurface()),
+      on_surface_variant: hex(c.onSurfaceVariant()),
+      outline: hex(c.outline()),
+      outline_variant: hex(c.outlineVariant()),
+      primary: hex(c.primary()),
+      on_primary: hex(c.onPrimary()),
+      primary_container: hex(c.primaryContainer()),
+      on_primary_container: hex(c.onPrimaryContainer()),
+      secondary_container: hex(c.secondaryContainer()),
+      on_secondary_container: hex(c.onSecondaryContainer()),
+      tertiary: hex(c.tertiary()),
+      tertiary_container: hex(c.tertiaryContainer()),
+      on_tertiary_container: hex(c.onTertiaryContainer()),
+      error: hex(c.error()),
+      error_container: hex(c.errorContainer()),
+      on_error_container: hex(c.onErrorContainer()),
+    };
   }
 
   destroy(): void {

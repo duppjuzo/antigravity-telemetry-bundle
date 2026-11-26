@@ -7,8 +7,10 @@ import {
   type MonetVariantId,
   type ThemeMode,
 } from '../theme/monet-engine';
+import type { MdSwitch } from '@material/web/switch/switch.js';
 import type {
   HomeScope,
+  HudStatus,
   SessionIndexItem,
   StatsResponse,
   UserSettings,
@@ -250,6 +252,31 @@ export class SettingsPage extends LitElement {
         color: var(--md-sys-color-on-surface-variant);
       }
 
+      .mode-badge.running {
+        background: var(--md-sys-color-primary-container);
+        color: var(--md-sys-color-on-primary-container);
+      }
+
+      .mode-badge.unsupported {
+        background: var(--md-sys-color-surface-container-highest);
+        color: var(--md-sys-color-on-surface-variant);
+      }
+
+      .hud-error {
+        margin-top: 8px;
+        padding: 8px 12px;
+        border-radius: var(--tm-radius-sm, 12px);
+        background: var(--md-sys-color-error-container);
+        color: var(--md-sys-color-on-error-container);
+        font-size: 12px;
+      }
+
+      .setting-action {
+        flex-shrink: 0;
+        display: inline-flex;
+        align-items: center;
+      }
+
       @container (width < 480px) {
         .setting-row {
           flex-direction: column;
@@ -273,6 +300,9 @@ export class SettingsPage extends LitElement {
 
   @state() private settings: UserSettings = telemetryStore.settings;
   @state() private data: StatsResponse | null = telemetryStore.data;
+  @state() private hudStatus: HudStatus | null = telemetryStore.hudStatus;
+  @state() private hudBusy = telemetryStore.hudBusy;
+  @state() private hudError: string | null = telemetryStore.hudError;
   @state() private sessionSearch = '';
 
   private unsubscribe?: () => void;
@@ -281,6 +311,7 @@ export class SettingsPage extends LitElement {
     super.connectedCallback();
     this.syncFromStore();
     this.unsubscribe = telemetryStore.subscribe(() => this.syncFromStore());
+    void telemetryStore.refreshHudStatus();
   }
 
   disconnectedCallback(): void {
@@ -291,6 +322,23 @@ export class SettingsPage extends LitElement {
   private syncFromStore(): void {
     this.settings = telemetryStore.settings;
     this.data = telemetryStore.data;
+    this.hudStatus = telemetryStore.hudStatus;
+    this.hudBusy = telemetryStore.hudBusy;
+    this.hudError = telemetryStore.hudError;
+  }
+
+  private handleHudToggle(e: Event): void {
+    const selected = Boolean((e.target as MdSwitch).selected);
+    void telemetryStore.setHudEnabled(selected);
+  }
+
+  private handleHudAlwaysOnTop(e: Event): void {
+    const selected = Boolean((e.target as MdSwitch).selected);
+    void telemetryStore.setHudAlwaysOnTop(selected);
+  }
+
+  private handleHudResetPosition(): void {
+    void telemetryStore.resetHudPosition();
   }
 
   private handleThemeModeChange(e: Event): void {
@@ -469,7 +517,10 @@ export class SettingsPage extends LitElement {
           </md-list>
         </md-outlined-card>
 
-        <!-- Section 2: 主页统计作用域 -->
+        <!-- Section 2: 桌面悬浮窗 -->
+        ${this.renderHudSection()}
+
+        <!-- Section 3: 主页统计作用域 -->
         <md-outlined-card class="settings-card">
           <div class="section-head">
             <div class="section-title-row">
@@ -511,7 +562,7 @@ export class SettingsPage extends LitElement {
           </md-list>
         </md-outlined-card>
 
-        <!-- Section 3: 手动选择会话 -->
+        <!-- Section 4: 手动选择会话 -->
         <md-outlined-card class="settings-card">
           <div class="section-head">
             <div class="section-title-row">
@@ -639,7 +690,7 @@ export class SettingsPage extends LitElement {
                               ? 'inherit'
                               : ctxToneVar(s.ctx_used_pct)};"
                           >
-                            Ctx ${ctxStr}
+                            上下文 ${ctxStr}
                           </span>
                           ${isSelected ? renderMdIcon('check') : nothing}
                         </span>
@@ -650,6 +701,110 @@ export class SettingsPage extends LitElement {
               `}
         </md-outlined-card>
       </div>
+    `;
+  }
+
+  private renderHudSection() {
+    const hud = this.hudStatus;
+    const hudSupported = hud ? Boolean(hud.supported) : true;
+    const hudRunning = Boolean(hud?.running);
+    const badgeClass = !hudSupported
+      ? 'unsupported'
+      : hudRunning
+        ? 'running'
+        : '';
+    const badgeLabel = !hudSupported
+      ? '仅限 Windows'
+      : hudRunning
+        ? '运行中'
+        : '已关闭';
+
+    return html`
+      <md-outlined-card class="settings-card">
+        <div class="section-head">
+          <div class="section-title-row">
+            ${renderMdIcon('picture_in_picture')}
+            <h2 class="section-title">桌面悬浮窗</h2>
+          </div>
+          <span class="mode-badge ${badgeClass}">${badgeLabel}</span>
+        </div>
+
+        <md-list class="settings-list">
+          <div class="setting-row">
+            <div class="setting-info">
+              <md-list-item>
+                ${renderMdIcon('picture_in_picture', 'start')}
+                <span slot="headline">启用桌面悬浮窗</span>
+                <span slot="supporting-text">
+                  ${hudSupported
+                    ? '在 Antigravity 窗口上方显示跟随式 M3 遥测胶囊，配色自动同步 Monet 主题'
+                    : '仅支持 Windows 桌面环境'}
+                </span>
+              </md-list-item>
+            </div>
+            <div class="setting-action">
+              <md-switch
+                aria-label="启用桌面悬浮窗"
+                .selected=${hudRunning}
+                ?disabled=${!hudSupported || this.hudBusy}
+                @change=${this.handleHudToggle}
+              ></md-switch>
+            </div>
+          </div>
+
+          ${hudSupported
+            ? html`
+                <md-divider></md-divider>
+
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <md-list-item>
+                      ${renderMdIcon('push_pin', 'start')}
+                      <span slot="headline">始终置顶显示</span>
+                      <span slot="supporting-text">
+                        切换到其他应用时保持可见，不随 Antigravity 失焦隐藏
+                      </span>
+                    </md-list-item>
+                  </div>
+                  <div class="setting-action">
+                    <md-switch
+                      aria-label="始终置顶显示"
+                      .selected=${Boolean(hud?.always_on_top)}
+                      ?disabled=${this.hudBusy}
+                      @change=${this.handleHudAlwaysOnTop}
+                    ></md-switch>
+                  </div>
+                </div>
+
+                <md-divider></md-divider>
+
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <md-list-item>
+                      ${renderMdIcon('restart_alt', 'start')}
+                      <span slot="headline">悬浮窗位置</span>
+                      <span slot="supporting-text">
+                        将拖拽后的胶囊复位至 Antigravity 窗口顶部居中
+                      </span>
+                    </md-list-item>
+                  </div>
+                  <div class="setting-action">
+                    <md-outlined-button
+                      ?disabled=${this.hudBusy}
+                      @click=${this.handleHudResetPosition}
+                    >
+                      重置位置
+                    </md-outlined-button>
+                  </div>
+                </div>
+              `
+            : nothing}
+        </md-list>
+
+        ${this.hudError
+          ? html`<div class="hud-error" role="alert">${this.hudError}</div>`
+          : nothing}
+      </md-outlined-card>
     `;
   }
 }

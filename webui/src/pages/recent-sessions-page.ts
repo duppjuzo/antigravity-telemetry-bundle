@@ -346,7 +346,7 @@ export class RecentSessionsPage extends LitElement {
                       <th scope="col">模型</th>
                       <th scope="col">步数</th>
                       <th scope="col">Tokens</th>
-                      <th scope="col">Ctx %</th>
+                      <th scope="col">上下文 %</th>
                       <th scope="col">Cache %</th>
                       <th scope="col">TTFT</th>
                       <th scope="col">Stream TPS</th>
@@ -411,7 +411,7 @@ export class RecentSessionsPage extends LitElement {
                             ${fmtCompact(s.total_tokens)}
                           </td>
                           <td
-                            data-label="Ctx %"
+                            data-label="上下文 %"
                             class="mono-val"
                             style="color:${isCurrent
                               ? 'inherit'

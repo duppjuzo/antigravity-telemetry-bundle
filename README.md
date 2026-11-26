@@ -31,15 +31,17 @@
   ```powershell
   powershell -ExecutionPolicy Bypass -File .\install.ps1
   ```
-- **部署完成后自动打开浏览器**：
+- **部署完成后自动打开浏览器（需配合 `--standalone`）**：
   ```powershell
-  powershell -ExecutionPolicy Bypass -File .\install.ps1 --open
+  powershell -ExecutionPolicy Bypass -File .\install.ps1 --standalone --open
   ```
 
-安装脚本会自动完成：
-1. 将自包含插件复制到 `%USERPROFILE%\.gemini\config\plugins\cache-monitor`
-2. 写入当前用户开机自启（`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`，无黑框后台运行 `pythonw.exe`）
-3. 启动并健康检查 `http://127.0.0.1:8765/`
+默认安装模式（**Sidecar 托管模式**）会自动完成：
+1. 将自包含插件复制到 `%USERPROFILE%\.gemini\config\plugins\cache-monitor`（随 Antigravity 启动与退出，不常驻后台）
+2. 自动清理旧版系统开机自启与独立后台 `pythonw.exe` 守护进程
+3. 若当前未运行 Antigravity Sidecar，则临时拉起服务完成 `/api/health` 自检后**立即停止并清理**，不会残留需要手动杀掉的 Python 进程
+
+> 如需在**关闭 Antigravity 后仍常驻系统后台**并开机自启，请追加 `--standalone` 参数：`.\install.ps1 --standalone`。
 
 **卸载**：双击 [`uninstall.bat`](./uninstall.bat) 或运行 `powershell -ExecutionPolicy Bypass -File .\uninstall.ps1`。
 
@@ -56,10 +58,10 @@ chmod +x install.sh uninstall.sh
 
 > 若使用 `.tar.gz` 解压，脚本已自带可执行权限，可直接运行 `./install.sh`。
 
-安装脚本会自动完成：
-1. 将自包含插件复制到 `~/.gemini/config/plugins/cache-monitor`
-2. 注册并加载原生 `launchd` 用户代理（`~/Library/LaunchAgents/com.antigravity.telemetry.plist`），开机自动后台守护
-3. 启动并健康检查 `http://127.0.0.1:8765/`
+默认安装模式（**Sidecar 托管模式**）会自动完成：
+1. 将自包含插件复制到 `~/.gemini/config/plugins/cache-monitor`（由 Antigravity Sidecar 随宿主启停）
+2. 清理旧版 `launchd` 代理及残留独立后台进程
+3. 完成 `/api/health` 临时自检并立即清理测试进程；若需独立系统守护，请使用 `./install.sh --standalone`（注册 `~/Library/LaunchAgents/com.antigravity.telemetry.plist`）
 
 **卸载**：`./uninstall.sh`
 
@@ -73,12 +75,10 @@ cd antigravity-telemetry-bundle
 ./install.sh
 ```
 
-安装脚本会自动完成：
-1. 将自包含插件复制到 `~/.gemini/config/plugins/cache-monitor`
-2. 自动检测 `systemd --user`：
-   - 若可用：注册并启用 `~/.config/systemd/user/antigravity-telemetry.service`（开机自启 + 异常自动拉起）
-   - 若不可用（如未启用 systemd 的 WSL2 / 精简容器）：自动降级为独立后台守护进程（带 PID/日志管理）
-3. 启动并健康检查 `http://127.0.0.1:8765/`
+默认安装模式会自动完成：
+1. 将自包含插件复制到 `~/.gemini/config/plugins/cache-monitor`（由 Antigravity Sidecar 随宿主启停）
+2. 清理旧版 `systemd --user` 单元及残留独立后台进程
+3. 完成 `/api/health` 临时自检并立即清理测试进程；若需独立系统守护，请使用 `./install.sh --standalone`（自动检测 `systemd --user` 或降级为独立后台守护）
 
 **远程 Linux 服务器 / 局域网访问示例**（监听 `0.0.0.0` 并仅部署服务）：
 ```bash
@@ -115,9 +115,9 @@ docker run -d --name antigravity-telemetry \
 
 ---
 
-### 5. 仅安装 Antigravity 插件（无独立系统常驻进程）
+### 5. 仅安装 Antigravity 插件（跳过临时自检）
 
-如果你只想在 Antigravity 内部使用侧边栏面板和 `cache-stats` Skill（开启 Antigravity 时由 Sidecar 自动拉起 `http://127.0.0.1:8765/`）：
+默认安装已采用由 Antigravity Sidecar 托管的轻量模式（不注册开机自启，也不保留独立后台进程）；若连部署末端的临时 `/api/health` 自检也想跳过，可加 `--plugin-only`：
 
 - 运行一键脚本并加 `--plugin-only`：
   ```bash
@@ -152,7 +152,8 @@ python3 deploy.py stop                             # 停止后台服务
 python3 deploy.py start --port 8765                # 启动后台服务
 python3 deploy.py serve --host 0.0.0.0 --port 8765 # 前台运行（便于调试或配合 Supervisor）
 python3 deploy.py serve --demo                     # 使用内置示例数据预览面板
-python3 deploy.py install --no-autostart           # 仅安装并启动，不写入系统开机自启
+python3 deploy.py install --standalone             # 安装插件并注册系统开机自启/常驻后台服务
+python3 deploy.py install --standalone --no-autostart # 仅启动独立后台服务，不写入开机自启
 python3 deploy.py install --gemini-home /path/.gemini --port 9000
 python3 deploy.py uninstall --keep-plugin          # 仅移除服务与自启，保留插件
 ```

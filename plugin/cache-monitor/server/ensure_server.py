@@ -7,6 +7,8 @@ Zero external dependencies — runs on Python 3.8+ standard library.
 from __future__ import annotations
 
 import argparse
+import csv
+import io
 import json
 import os
 import signal
@@ -128,6 +130,38 @@ def _pid_alive(pid: int) -> bool:
         return False
 
 
+def _pid_is_python(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        try:
+            res = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000),
+            )
+            for row in csv.reader(io.StringIO(res.stdout or "")):
+                if len(row) >= 2 and row[1].strip() == str(pid):
+                    return "python" in row[0].lower()
+            return False
+        except Exception:
+            return False
+    proc_dir = f"/proc/{pid}"
+    if os.path.isdir(proc_dir):
+        for name in ("cmdline", "comm"):
+            try:
+                with open(os.path.join(proc_dir, name), "rb") as f:
+                    raw = f.read().decode("utf-8", errors="ignore").lower()
+                if "python" in raw:
+                    return True
+            except OSError:
+                pass
+        return False
+    return True
+
+
 def _stop_pid(pid: int) -> bool:
     if not _pid_alive(pid):
         return False
@@ -159,8 +193,9 @@ def stop_server(port: int) -> dict:
     state = _read_state(port)
     stopped_pids: list[int] = []
     if state and isinstance(state.get("pid"), int):
-        if _stop_pid(state["pid"]):
-            stopped_pids.append(state["pid"])
+        pid = state["pid"]
+        if _pid_is_python(pid) and _stop_pid(pid):
+            stopped_pids.append(pid)
     _remove_state(port)
     time.sleep(0.2)
     return {"status": "stopped", "port": port, "stopped_pids": stopped_pids}

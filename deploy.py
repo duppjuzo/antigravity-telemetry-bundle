@@ -376,6 +376,84 @@ def _run_ensure(
     return res.returncode, payload
 
 
+def _verify_server_self_test(
+    server_dir: Path,
+    host: str,
+    port: int,
+    gemini_home: Path,
+    demo: bool = False,
+) -> tuple[dict | None, bool, str]:
+    """Verify server startup with a temporary foreground-owned process and stop it before returning."""
+    existing = _check_health(host, port)
+    if existing is not None:
+        return existing, True, ""
+
+    server_py = server_dir / "server.py"
+    if not server_py.exists():
+        server_py = PLUGIN_SRC / "server" / "server.py"
+    if not server_py.exists():
+        return None, False, f"server.py not found at {server_py}"
+
+    cmd = [sys.executable, str(server_py), "--host", host, "--port", str(port), "--secondary-port", "0"]
+    if not _is_default_gemini_home(gemini_home):
+        cmd.extend(["--gemini-home", str(gemini_home)])
+    if demo:
+        cmd.append("--demo")
+
+    env = os.environ.copy()
+    env.pop("ANTIGRAVITY_SIDECAR_WEB_PORT", None)
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUNBUFFERED"] = "1"
+
+    popen_kwargs: dict = {
+        "cwd": str(server_py.parent),
+        "env": env,
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.PIPE,
+        "text": True,
+    }
+    if _is_windows():
+        popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+
+    proc = subprocess.Popen(cmd, **popen_kwargs)
+    health: dict | None = None
+    err_msg = ""
+    try:
+        deadline = time.monotonic() + 6.0
+        while time.monotonic() < deadline:
+            health = _check_health(host, port, timeout=1.0)
+            if health is not None:
+                break
+            if proc.poll() is not None:
+                break
+            time.sleep(0.15)
+        if health is None and proc.poll() is not None:
+            out, err = proc.communicate(timeout=1.0)
+            err_msg = (err or out or f"server exited with code {proc.returncode}").strip()
+        elif health is None:
+            err_msg = f"timed out waiting for /api/health on {_health_host(host)}:{port}"
+    finally:
+        if proc.poll() is None:
+            try:
+                proc.terminate()
+                proc.wait(timeout=3.0)
+            except Exception:
+                try:
+                    proc.kill()
+                    proc.wait(timeout=2.0)
+                except Exception:
+                    pass
+        for stream in (proc.stdout, proc.stderr):
+            if stream is not None:
+                try:
+                    stream.close()
+                except Exception:
+                    pass
+
+    return health, False, err_msg
+
+
 # ---------------------------------------------------------------------------
 # Commands
 # ---------------------------------------------------------------------------
@@ -410,12 +488,30 @@ def cmd_install(args: argparse.Namespace) -> int:
             print("  Note: 'node' was not found on PATH. The standalone web service works with Python alone,")
             print("        while Antigravity's built-in Node runs the sidecar automatically inside Antigravity.")
 
-    # 2. Configure OS autostart
-    autostart_info: dict = {"method": "skipped"}
+    # 2. Configure lifecycle / OS autostart
+    standalone_daemon = bool((args.service_only or args.standalone) and not args.plugin_only)
+    autostart_info: dict = {"method": "sidecar-managed"}
     if args.plugin_only:
         print("\n[2/3] Skipping standalone OS service (--plugin-only).")
-        print("      Antigravity will automatically start the dashboard sidecar when the plugin is enabled.")
+        print("      Antigravity will automatically start and stop the dashboard sidecar when the plugin is enabled.")
+    elif not standalone_daemon:
+        print("\n[2/3] Configuring Antigravity-managed lifecycle (auto-starts & exits with Antigravity)...")
+        removed_auto = False
+        if _is_windows():
+            removed_auto = _windows_remove_autostart()
+        elif _is_macos():
+            removed_auto = _macos_remove_autostart()
+        elif _is_linux():
+            removed_auto = _linux_remove_autostart()
+        _, stop_res = _run_ensure(server_dir, args.host, args.port, gemini_home, extra_args=["--stop"])
+        stopped_pids = stop_res.get("stopped_pids") or []
+        if removed_auto:
+            print("      Removed legacy OS autostart entry.")
+        if stopped_pids:
+            print(f"      Stopped legacy standalone daemon (pids={stopped_pids}).")
+        print("      Mode: sidecar-managed (use --standalone if you need OS autostart when Antigravity is closed).")
     elif args.no_autostart:
+        autostart_info = {"method": "skipped"}
         print("\n[2/3] Skipping OS autostart (--no-autostart).")
     else:
         print("\n[2/3] Configuring OS-native autostart...")
@@ -429,13 +525,14 @@ def cmd_install(args: argparse.Namespace) -> int:
         if autostart_info.get("note"):
             print(f"      {autostart_info['note']}")
 
-    # 3. Start and verify service
+    # 3. Start or verify service
     url = f"http://{_health_host(args.host)}:{args.port}/"
     health = None
+    already_running = False
     if args.plugin_only or args.no_start:
         print("\n[3/3] Service startup skipped per flags.")
-    else:
-        print(f"\n[3/3] Starting & verifying telemetry service at {url} ...")
+    elif standalone_daemon:
+        print(f"\n[3/3] Starting & verifying standalone telemetry service at {url} ...")
         managed_by_os = autostart_info.get("method") in ("macos-launchd", "linux-systemd-user")
         if managed_by_os:
             health = _wait_health(args.host, args.port, timeout_sec=6.0)
@@ -449,6 +546,18 @@ def cmd_install(args: argparse.Namespace) -> int:
             else:
                 print(f"  Warning: background launcher returned code {code}: {payload}", file=sys.stderr)
                 return 1
+    else:
+        print(f"\n[3/3] Verifying telemetry service at {url} (temporary self-test if Antigravity sidecar is not running) ...")
+        health, already_running, err_msg = _verify_server_self_test(
+            server_dir, args.host, args.port, gemini_home, demo=args.demo
+        )
+        if health is None:
+            print(f"  Warning: telemetry server self-test failed: {err_msg}", file=sys.stderr)
+            return 1
+        if already_running:
+            print("      Existing telemetry server is healthy (managed by Antigravity sidecar).")
+        else:
+            print("      Self-test passed; temporary verification server stopped cleanly (no background Python process left behind).")
 
     print("\n=== Deployment Complete ===")
     if not args.service_only:
@@ -460,10 +569,13 @@ def cmd_install(args: argparse.Namespace) -> int:
         print(f"  Health Status      : OK (v{health.get('version', VERSION)}, {health.get('timestamp', '')})")
 
     if args.open and health:
-        try:
-            webbrowser.open(url)
-        except Exception:
-            pass
+        if standalone_daemon or already_running:
+            try:
+                webbrowser.open(url)
+            except Exception:
+                pass
+        else:
+            print("  Note: Temporary self-test server was stopped. Open Telemetry Dashboard inside Antigravity, or pass --standalone.")
 
     return 0
 
@@ -585,8 +697,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command")
 
-    p_inst = sub.add_parser("install", parents=[common], help="One-click install plugin, autostart, and start service")
-    p_inst.add_argument("--plugin-only", action="store_true", help="Install only the Antigravity plugin (skip OS autostart/daemon)")
+    p_inst = sub.add_parser("install", parents=[common], help="One-click install plugin and verify service")
+    p_inst.add_argument("--standalone", action="store_true", help="Also register OS autostart and keep a standalone background daemon running when Antigravity is closed")
+    p_inst.add_argument("--plugin-only", action="store_true", help="Install only the Antigravity plugin (skip OS autostart/daemon and self-test)")
     p_inst.add_argument("--service-only", action="store_true", help="Install only the standalone web service (skip Antigravity plugin)")
     p_inst.add_argument("--no-autostart", action="store_true", help="Do not register OS autostart")
     p_inst.add_argument("--no-start", action="store_true", help="Do not start the server after installation")
