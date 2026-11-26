@@ -40,7 +40,7 @@ export class HomePage extends LitElement {
         display: flex;
         flex-direction: column;
         gap: 16px;
-        padding-bottom: 88px;
+        padding-bottom: 96px;
       }
 
       .cards-grid {

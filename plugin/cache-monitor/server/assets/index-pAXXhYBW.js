@@ -2324,24 +2324,26 @@
             <h1 class="top-bar-title">${o.label}</h1>
           </div>
 
-          <div class="top-bar-actions">
-            <span class="live-pill ${this.liveEnabled?"active":""}">
-              ${this.liveEnabled?"LIVE 3s":"已暂停"}
-            </span>
-            <md-icon-button
-              aria-label=${this.liveEnabled?"暂停实时轮询":"开启实时轮询"}
-              @click=${()=>k.toggleLive()}
-            >
-              ${N(this.liveEnabled?"pause":"play_arrow")}
-            </md-icon-button>
-            <md-icon-button
-              aria-label="立即刷新"
-              ?disabled=${this.isFetching}
-              @click=${()=>void k.refresh(!0)}
-            >
-              ${N("refresh")}
-            </md-icon-button>
-          </div>
+          ${this.activePage!=="home"?h`
+                <div class="top-bar-actions">
+                  <span class="live-pill ${this.liveEnabled?"active":""}">
+                    ${this.liveEnabled?"LIVE 3s":"已暂停"}
+                  </span>
+                  <md-icon-button
+                    aria-label=${this.liveEnabled?"暂停实时轮询":"开启实时轮询"}
+                    @click=${()=>k.toggleLive()}
+                  >
+                    ${N(this.liveEnabled?"pause":"play_arrow")}
+                  </md-icon-button>
+                  <md-icon-button
+                    aria-label="立即刷新"
+                    ?disabled=${this.isFetching}
+                    @click=${()=>void k.refresh(!0)}
+                  >
+                    ${N("refresh")}
+                  </md-icon-button>
+                </div>
+              `:b}
         </header>
 
         <main class="main-viewport">
@@ -3492,7 +3494,7 @@
         display: flex;
         flex-direction: column;
         gap: 16px;
-        padding-bottom: 88px;
+        padding-bottom: 96px;
       }
 
       .cards-grid {

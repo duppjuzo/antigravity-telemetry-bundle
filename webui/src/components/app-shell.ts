@@ -257,24 +257,30 @@ export class TelemetryApp extends LitElement {
             <h1 class="top-bar-title">${currentNav.label}</h1>
           </div>
 
-          <div class="top-bar-actions">
-            <span class="live-pill ${this.liveEnabled ? 'active' : ''}">
-              ${this.liveEnabled ? 'LIVE 3s' : '已暂停'}
-            </span>
-            <md-icon-button
-              aria-label=${this.liveEnabled ? '暂停实时轮询' : '开启实时轮询'}
-              @click=${() => telemetryStore.toggleLive()}
-            >
-              ${renderMdIcon(this.liveEnabled ? 'pause' : 'play_arrow')}
-            </md-icon-button>
-            <md-icon-button
-              aria-label="立即刷新"
-              ?disabled=${this.isFetching}
-              @click=${() => void telemetryStore.refresh(true)}
-            >
-              ${renderMdIcon('refresh')}
-            </md-icon-button>
-          </div>
+          ${this.activePage !== 'home'
+            ? html`
+                <div class="top-bar-actions">
+                  <span class="live-pill ${this.liveEnabled ? 'active' : ''}">
+                    ${this.liveEnabled ? 'LIVE 3s' : '已暂停'}
+                  </span>
+                  <md-icon-button
+                    aria-label=${this.liveEnabled
+                      ? '暂停实时轮询'
+                      : '开启实时轮询'}
+                    @click=${() => telemetryStore.toggleLive()}
+                  >
+                    ${renderMdIcon(this.liveEnabled ? 'pause' : 'play_arrow')}
+                  </md-icon-button>
+                  <md-icon-button
+                    aria-label="立即刷新"
+                    ?disabled=${this.isFetching}
+                    @click=${() => void telemetryStore.refresh(true)}
+                  >
+                    ${renderMdIcon('refresh')}
+                  </md-icon-button>
+                </div>
+              `
+            : nothing}
         </header>
 
         <main class="main-viewport">
