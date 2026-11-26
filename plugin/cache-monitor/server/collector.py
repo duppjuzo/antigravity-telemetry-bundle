@@ -56,11 +56,24 @@ DATA_SOURCES = get_data_sources()
 
 CACHE_SCHEMA_VERSION = 5
 
+def _extract_effort_suffix(r):
+    if re.search(r'(?:^|[-_\s])xhigh(?:$|[-_\s])', r):
+        return ' (XHigh)'
+    if re.search(r'(?:^|[-_\s])high(?:$|[-_\s])', r):
+        return ' (High)'
+    if re.search(r'(?:^|[-_\s])medium(?:$|[-_\s])', r):
+        return ' (Medium)'
+    if re.search(r'(?:^|[-_\s])low(?:$|[-_\s])', r):
+        return ' (Low)'
+    return ''
+
+
 def normalize_model_name(raw):
     """Maps raw model identifier strings to clean frontier display names."""
     if not raw:
         return None
     r = raw.lower().strip().rstrip('-')
+    effort = _extract_effort_suffix(r)
 
     # Orchestrator / Execution / Gemini 4 models
     if 'orchestrator' in r:
@@ -68,43 +81,43 @@ def normalize_model_name(raw):
     if 'flash-worker' in r:
         return 'Gemini Flash'
     if '4-argon' in r or '4.0-argon' in r:
-        return 'Gemini 4 Argon'
+        return 'Gemini 4 Argon' + effort
     if '4-hydrogen' in r or '4.0-hydrogen' in r:
-        return 'Gemini 4 Hydrogen'
+        return 'Gemini 4 Hydrogen' + effort
     if '4-carbon' in r or '4.0-carbon' in r:
-        return 'Gemini 4 Carbon'
+        return 'Gemini 4 Carbon' + effort
     if '4-neon' in r or '4.0-neon' in r:
-        return 'Gemini 4 Neon'
+        return 'Gemini 4 Neon' + effort
 
     # Claude models
     if 'claude-opus-5-5' in r or 'opus-5.5' in r or 'opus-5-5' in r:
-        return 'Claude Opus 5.5'
+        return 'Claude Opus 5.5' + effort
     if 'claude-sonnet-4-6' in r or 'sonnet-4.6' in r or 'sonnet-4-6' in r:
-        return 'Claude Sonnet 4.6'
+        return 'Claude Sonnet 4.6' + effort
     if 'claude-opus-4-6' in r or 'opus-4.6' in r or 'opus-4-6' in r:
-        return 'Claude Opus 4.6'
+        return 'Claude Opus 4.6' + effort
     if 'claude-haiku-4-5' in r or 'haiku-4.5' in r or 'haiku-4-5' in r:
-        return 'Claude Haiku 4.5'
+        return 'Claude Haiku 4.5' + effort
     if 'claude' in r and 'sonnet' in r:
-        return 'Claude Sonnet 4.6'
+        return 'Claude Sonnet 4.6' + effort
     if 'claude' in r and 'opus' in r:
-        return 'Claude Opus 4.6'
+        return 'Claude Opus 4.6' + effort
     if 'claude' in r and 'haiku' in r:
-        return 'Claude Haiku 4.5'
+        return 'Claude Haiku 4.5' + effort
 
     # Gemini 3.x models
     if '3.8-flash' in r or '3.8' in r:
-        return 'Gemini 3.8 Flash'
+        return 'Gemini 3.8 Flash' + effort
     if '3.7-flash' in r or '3.7' in r:
-        return 'Gemini 3.7 Flash'
+        return 'Gemini 3.7 Flash' + effort
     if '3.6-flash' in r or '3.6' in r:
-        return 'Gemini 3.6 Flash'
+        return 'Gemini 3.6 Flash' + effort
     if '3.5-flash' in r or '3.5' in r:
-        return 'Gemini 3.5 Flash'
+        return 'Gemini 3.5 Flash' + effort
     if '3.1-pro' in r or '3.1' in r:
-        return 'Gemini 3.1 Pro'
+        return 'Gemini 3.1 Pro' + effort
     if '3-flash' in r:
-        return 'Gemini 3 Flash'
+        return 'Gemini 3 Flash' + effort
     if 'gemini-pro' in r:
         return 'Gemini Pro Agent'
     if 'gemini-flash' in r:
@@ -133,7 +146,12 @@ MODEL_MAP = {
     1418: "Gemini 4 Argon (Medium)",
     1427: "Gemini 4 Carbon (High)",
     1461: "Gemini 4 Hydrogen (High)",
+    1525: "Gemini 4 Hydrogen (High)",
     1526: "Gemini 4 Hydrogen (Medium)",
+    1528: "Gemini 4 Hydrogen (XHigh)",
+    1532: "Gemini 4 Neon (High)",
+    1533: "Gemini 4 Neon (Medium)",
+    1535: "Gemini 4 Neon (XHigh)",
     1668: "Orchestrator (Argon)",
     1669: "Gemini Flash",
 }
@@ -307,6 +325,12 @@ def _extract_gen_metadata_models(cur):
                 continue
             try:
                 top = parse_proto(data)
+                top3_slug = ""
+                if 3 in top and top[3]:
+                    top3 = parse_proto(top[3][0][1])
+                    if 28 in top3 and top3[28]:
+                        top3_slug = top3[28][0][1].decode('utf-8', errors='ignore').strip()
+
                 for _, p1 in top.get(1, []):
                     sub1 = parse_proto(p1)
                     model_id = None
@@ -321,6 +345,8 @@ def _extract_gen_metadata_models(cur):
                         raw_label = sub1[21][0][1].decode('utf-8', errors='ignore').strip()
                         if raw_label:
                             display_name = raw_label
+                    if not display_name and top3_slug:
+                        display_name = normalize_model_name(top3_slug)
                     if not display_name and 19 in sub1 and sub1[19]:
                         slug = sub1[19][0][1].decode('utf-8', errors='ignore').strip()
                         display_name = normalize_model_name(slug)
@@ -382,6 +408,7 @@ def parse_session_db(db_path, surface="IDE", brain_dir=None):
             steps_data = []
             step_times = {}
             session_models_used = []
+            unresolved_model_steps = set()
             p15_ordinal = 0
             try:
                 rows = cur.execute(
@@ -429,14 +456,16 @@ def parse_session_db(db_path, surface="IDE", brain_dir=None):
                             if p15_ordinal < len(gm_ordered_models) and gm_ordered_models[p15_ordinal]
                             else None
                         )
-                        step_model = (
+                        resolved_model = (
                             gm_step_models.get(idx)
                             or ordered_model
                             or gm_id_models.get(model_id)
                             or MODEL_MAP.get(model_id)
                             or exec_step_models.get(idx)
-                            or "Gemini 3.8 Flash"
                         )
+                        if not resolved_model:
+                            unresolved_model_steps.add(len(steps_data))
+                        step_model = resolved_model or "Gemini 3.8 Flash"
                         p15_ordinal += 1
                         session_models_used.append(step_model)
 
@@ -478,7 +507,10 @@ def parse_session_db(db_path, surface="IDE", brain_dir=None):
                     cached = usage.get(5, [('varint', 0)])[0][1]
                     text_out = usage.get(9, [('varint', 0)])[0][1]
                     thinking = usage.get(10, [('varint', 0)])[0][1]
-                    step_model = display_name or gm_id_models.get(model_id) or MODEL_MAP.get(model_id) or exec_step_models.get(gm_idx) or "Gemini 3.8 Flash"
+                    resolved_model = display_name or gm_id_models.get(model_id) or MODEL_MAP.get(model_id) or exec_step_models.get(gm_idx)
+                    if not resolved_model:
+                        unresolved_model_steps.add(len(steps_data))
+                    step_model = resolved_model or "Gemini 3.8 Flash"
                     session_models_used.append(step_model)
                     ts = step_times.get(gm_idx) or int(os.path.getmtime(db_path))
                     step_cache_pct = round((cached / (cached + inp)) * 100, 1) if (cached + inp) > 0 else 0.0
@@ -548,6 +580,7 @@ def parse_session_db(db_path, surface="IDE", brain_dir=None):
     tool_counts = defaultdict(int)
     tool_errors = 0
     first_prompt = ""
+    transcript_step_models = {}
     
     if transcript_path and os.path.exists(transcript_path):
         try:
@@ -563,6 +596,10 @@ def parse_session_db(db_path, surface="IDE", brain_dir=None):
                             clean_p = ' '.join(clean_p.split())
                             if clean_p:
                                 first_prompt = clean_p[:90]
+                        if stype == "PLANNER_RESPONSE" and step.get("model"):
+                            norm_tm = normalize_model_name(str(step.get("model")))
+                            if norm_tm and step.get("step_index") is not None:
+                                transcript_step_models[step.get("step_index")] = norm_tm
                         if "tool_calls" in step:
                             for tc in step["tool_calls"]:
                                 name = tc.get("name", tc.get("toolAction", "unknown"))
@@ -574,6 +611,14 @@ def parse_session_db(db_path, surface="IDE", brain_dir=None):
                         pass
         except Exception:
             pass
+
+    if unresolved_model_steps and transcript_step_models:
+        for pos in unresolved_model_steps:
+            st = steps_data[pos]
+            tm = transcript_step_models.get(st["idx"])
+            if tm:
+                st["model"] = tm
+        model_name = Counter(st["model"] for st in steps_data).most_common(1)[0][0]
 
     total_input = sum(s["input_tokens"] for s in steps_data)
     total_cached = sum(s["cached_tokens"] for s in steps_data)
