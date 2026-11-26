@@ -21,6 +21,7 @@ from collections import defaultdict, Counter
 from contextlib import closing
 
 _SYNC_LOCK = threading.Lock()
+_HOST_THEME_CACHE = {"path": "", "mtime": -1.0, "value": None}
 
 
 def get_gemini_home() -> str:
@@ -28,6 +29,54 @@ def get_gemini_home() -> str:
     if env_home:
         return os.path.abspath(os.path.expanduser(env_home))
     return os.path.join(os.path.expanduser("~"), ".gemini")
+
+
+def get_host_theme() -> dict:
+    """Reads Antigravity userSettings.themeMode and contrast from config.json (mtime-cached)."""
+    default_theme = {
+        "theme_mode": "THEME_MODE_INHERIT",
+        "scheme": "system",
+        "contrast": "CONTRAST_LEVEL_DEFAULT",
+        "high_contrast": False,
+    }
+    cfg_path = os.path.join(get_gemini_home(), "config", "config.json")
+    try:
+        mtime = os.path.getmtime(cfg_path)
+    except OSError:
+        return default_theme
+
+    if (
+        _HOST_THEME_CACHE["path"] == cfg_path
+        and _HOST_THEME_CACHE["mtime"] == mtime
+        and _HOST_THEME_CACHE["value"] is not None
+    ):
+        return dict(_HOST_THEME_CACHE["value"])
+
+    try:
+        with open(cfg_path, "r", encoding="utf-8", errors="replace") as f:
+            raw = json.load(f)
+        us = raw.get("userSettings") if isinstance(raw, dict) else None
+        if not isinstance(us, dict):
+            us = {}
+        theme_mode = str(us.get("themeMode") or "THEME_MODE_INHERIT")
+        contrast = str(us.get("contrast") or "CONTRAST_LEVEL_DEFAULT")
+        tm_lower = theme_mode.lower()
+        if "light" in tm_lower:
+            scheme = "light"
+        elif "dark" in tm_lower:
+            scheme = "dark"
+        else:
+            scheme = "system"
+        result = {
+            "theme_mode": theme_mode,
+            "scheme": scheme,
+            "contrast": contrast,
+            "high_contrast": "high" in contrast.lower(),
+        }
+        _HOST_THEME_CACHE.update({"path": cfg_path, "mtime": mtime, "value": result})
+        return dict(result)
+    except Exception:
+        return default_theme
 
 
 def get_cache_file() -> str:
@@ -54,13 +103,27 @@ GEMINI_HOME = get_gemini_home()
 CACHE_FILE = get_cache_file()
 DATA_SOURCES = get_data_sources()
 
-CACHE_SCHEMA_VERSION = 5
+CACHE_SCHEMA_VERSION = 6
+
+
+def _extract_effort_suffix(r):
+    if re.search(r'(?:^|[-_\s])xhigh(?:$|[-_\s])', r):
+        return ' (XHigh)'
+    if re.search(r'(?:^|[-_\s])high(?:$|[-_\s])', r):
+        return ' (High)'
+    if re.search(r'(?:^|[-_\s])medium(?:$|[-_\s])', r):
+        return ' (Medium)'
+    if re.search(r'(?:^|[-_\s])low(?:$|[-_\s])', r):
+        return ' (Low)'
+    return ''
+
 
 def normalize_model_name(raw):
     """Maps raw model identifier strings to clean frontier display names."""
     if not raw:
         return None
     r = raw.lower().strip().rstrip('-')
+    effort = _extract_effort_suffix(r)
 
     # Orchestrator / Execution / Gemini 4 models
     if 'orchestrator' in r:
@@ -68,43 +131,43 @@ def normalize_model_name(raw):
     if 'flash-worker' in r:
         return 'Gemini Flash'
     if '4-argon' in r or '4.0-argon' in r:
-        return 'Gemini 4 Argon'
+        return 'Gemini 4 Argon' + effort
     if '4-hydrogen' in r or '4.0-hydrogen' in r:
-        return 'Gemini 4 Hydrogen'
+        return 'Gemini 4 Hydrogen' + effort
     if '4-carbon' in r or '4.0-carbon' in r:
-        return 'Gemini 4 Carbon'
+        return 'Gemini 4 Carbon' + effort
     if '4-neon' in r or '4.0-neon' in r:
-        return 'Gemini 4 Neon'
+        return 'Gemini 4 Neon' + effort
 
     # Claude models
     if 'claude-opus-5-5' in r or 'opus-5.5' in r or 'opus-5-5' in r:
-        return 'Claude Opus 5.5'
+        return 'Claude Opus 5.5' + effort
     if 'claude-sonnet-4-6' in r or 'sonnet-4.6' in r or 'sonnet-4-6' in r:
-        return 'Claude Sonnet 4.6'
+        return 'Claude Sonnet 4.6' + effort
     if 'claude-opus-4-6' in r or 'opus-4.6' in r or 'opus-4-6' in r:
-        return 'Claude Opus 4.6'
+        return 'Claude Opus 4.6' + effort
     if 'claude-haiku-4-5' in r or 'haiku-4.5' in r or 'haiku-4-5' in r:
-        return 'Claude Haiku 4.5'
+        return 'Claude Haiku 4.5' + effort
     if 'claude' in r and 'sonnet' in r:
-        return 'Claude Sonnet 4.6'
+        return 'Claude Sonnet 4.6' + effort
     if 'claude' in r and 'opus' in r:
-        return 'Claude Opus 4.6'
+        return 'Claude Opus 4.6' + effort
     if 'claude' in r and 'haiku' in r:
-        return 'Claude Haiku 4.5'
+        return 'Claude Haiku 4.5' + effort
 
     # Gemini 3.x models
     if '3.8-flash' in r or '3.8' in r:
-        return 'Gemini 3.8 Flash'
+        return 'Gemini 3.8 Flash' + effort
     if '3.7-flash' in r or '3.7' in r:
-        return 'Gemini 3.7 Flash'
+        return 'Gemini 3.7 Flash' + effort
     if '3.6-flash' in r or '3.6' in r:
-        return 'Gemini 3.6 Flash'
+        return 'Gemini 3.6 Flash' + effort
     if '3.5-flash' in r or '3.5' in r:
-        return 'Gemini 3.5 Flash'
+        return 'Gemini 3.5 Flash' + effort
     if '3.1-pro' in r or '3.1' in r:
-        return 'Gemini 3.1 Pro'
+        return 'Gemini 3.1 Pro' + effort
     if '3-flash' in r:
-        return 'Gemini 3 Flash'
+        return 'Gemini 3 Flash' + effort
     if 'gemini-pro' in r:
         return 'Gemini Pro Agent'
     if 'gemini-flash' in r:
@@ -133,7 +196,12 @@ MODEL_MAP = {
     1418: "Gemini 4 Argon (Medium)",
     1427: "Gemini 4 Carbon (High)",
     1461: "Gemini 4 Hydrogen (High)",
+    1525: "Gemini 4 Hydrogen (High)",
     1526: "Gemini 4 Hydrogen (Medium)",
+    1528: "Gemini 4 Hydrogen (XHigh)",
+    1532: "Gemini 4 Neon (High)",
+    1533: "Gemini 4 Neon (Medium)",
+    1535: "Gemini 4 Neon (XHigh)",
     1668: "Orchestrator (Argon)",
     1669: "Gemini Flash",
 }
@@ -148,8 +216,6 @@ def fallback_context_limit(model_name):
     if "gemini 4" in m or "orchestrator" in m:
         return 512_000
     return 1_048_576
-
-
 # Pricing per 1M tokens (Standard Gemini Flash reference model)
 RATE_INPUT = 0.10
 RATE_CACHE = 0.025
@@ -309,7 +375,7 @@ def open_readonly_db(db_path):
         return sqlite3.connect(imm_uri, uri=True, timeout=2.0)
 
 def _parse_context_snapshot(sub1):
-    """Extracts native context window usage and limit from gen_metadata sub1[9][10]."""
+    """Extracts native context window usage, limit, and category breakdown from gen_metadata sub1[9][10]."""
     if 9 not in sub1 or not sub1[9]:
         return None
     k9 = parse_proto(sub1[9][0][1])
@@ -319,22 +385,54 @@ def _parse_context_snapshot(sub1):
     est_tokens = k9_10.get(1, [('varint', 0)])[0][1]
     compacted_flag = k9_10.get(2, [('varint', 0)])[0][1]
     limit_tokens = k9_10.get(4, [('varint', 0)])[0][1]
-    if est_tokens <= 0 and limit_tokens <= 0:
+
+    categories = []
+    if 3 in k9_10 and k9_10[3]:
+        c3 = parse_proto(k9_10[3][0][1])
+        for _, cb in c3.get(1, []):
+            cf = parse_proto(cb)
+            cname = cf.get(1, [('bytes', b'')])[0][1].decode('utf-8', errors='ignore').strip()
+            if not cname:
+                continue
+            cid = cf.get(2, [('varint', 0)])[0][1]
+            is_system = bool(cf.get(3, [('varint', 0)])[0][1])
+            ctok = cf.get(4, [('varint', 0)])[0][1]
+            items = []
+            for _, ib in cf.get(5, []):
+                ip = parse_proto(ib)
+                iname = ip.get(1, [('bytes', b'')])[0][1].decode('utf-8', errors='ignore').strip()
+                itok = ip.get(3, [('varint', 0)])[0][1]
+                if iname or itok > 0:
+                    items.append({"name": iname or "item", "tokens": itok})
+            items.sort(key=lambda x: x["tokens"], reverse=True)
+            categories.append({
+                "name": cname,
+                "category_id": cid,
+                "is_system": is_system,
+                "tokens": ctok,
+                "item_count": len(items),
+                "items": items[:40],
+            })
+    categories.sort(key=lambda x: x["tokens"], reverse=True)
+    if est_tokens <= 0 and limit_tokens <= 0 and not categories:
         return None
     return {
         "est_tokens": est_tokens,
         "compacted_flag": compacted_flag,
         "limit_tokens": limit_tokens,
+        "categories": categories,
     }
 
 
-def _extract_gen_metadata_models(cur, ctx_out=None):
-    """Extracts exact step->model, ordered model list, and model_id->model mappings from gen_metadata protobuf fields (19/20/21)."""
+def _extract_gen_metadata(cur):
+    """Extracts step->model, ordered model list, model_id->model, fallback usage rows, and context snapshots from gen_metadata."""
     gm_step_models = {}
     gm_id_models = {}
     gm_ordered_models = []
     fallback_rows = []
     latest_ctx = None
+    ctx_by_step = {}
+    ctx_ordered = []
     try:
         rows = cur.execute('SELECT idx, data FROM gen_metadata ORDER BY idx ASC').fetchall()
         for gm_idx, data in rows:
@@ -342,6 +440,12 @@ def _extract_gen_metadata_models(cur, ctx_out=None):
                 continue
             try:
                 top = parse_proto(data)
+                top3_slug = ""
+                if 3 in top and top[3]:
+                    top3 = parse_proto(top[3][0][1])
+                    if 28 in top3 and top3[28]:
+                        top3_slug = top3[28][0][1].decode('utf-8', errors='ignore').strip()
+
                 for _, p1 in top.get(1, []):
                     sub1 = parse_proto(p1)
                     model_id = None
@@ -356,6 +460,8 @@ def _extract_gen_metadata_models(cur, ctx_out=None):
                         raw_label = sub1[21][0][1].decode('utf-8', errors='ignore').strip()
                         if raw_label:
                             display_name = raw_label
+                    if not display_name and top3_slug:
+                        display_name = normalize_model_name(top3_slug)
                     if not display_name and 19 in sub1 and sub1[19]:
                         slug = sub1[19][0][1].decode('utf-8', errors='ignore').strip()
                         display_name = normalize_model_name(slug)
@@ -372,6 +478,16 @@ def _extract_gen_metadata_models(cur, ctx_out=None):
                     ctx_snap = _parse_context_snapshot(sub1)
                     if ctx_snap is not None:
                         latest_ctx = ctx_snap
+                        step_ctx = {
+                            "used": ctx_snap["est_tokens"],
+                            "limit": ctx_snap["limit_tokens"],
+                        }
+                        ctx_ordered.append(step_ctx)
+                        if last_step_idx is not None:
+                            ctx_by_step[last_step_idx + 1] = step_ctx
+                            ctx_by_step.setdefault(last_step_idx, step_ctx)
+                    elif usage_vals is not None:
+                        ctx_ordered.append(None)
 
                     if display_name:
                         if model_id:
@@ -387,9 +503,64 @@ def _extract_gen_metadata_models(cur, ctx_out=None):
                 pass
     except Exception:
         pass
-    if ctx_out is not None:
-        ctx_out["latest_ctx"] = latest_ctx
-    return gm_step_models, gm_id_models, gm_ordered_models, fallback_rows
+    return gm_step_models, gm_id_models, gm_ordered_models, fallback_rows, latest_ctx, ctx_by_step, ctx_ordered
+
+
+def _build_session_context(latest_ctx, latest_api_prompt, latest_model):
+    """Builds normalized context window usage & category breakdown payload for a session."""
+    if latest_ctx is not None:
+        used_tokens = latest_ctx["est_tokens"] or latest_api_prompt
+        limit_tokens = latest_ctx["limit_tokens"] or fallback_context_limit(latest_model)
+        source = "db_native"
+        compacted = bool(latest_ctx["compacted_flag"])
+        raw_cats = latest_ctx["categories"]
+    else:
+        used_tokens = latest_api_prompt
+        limit_tokens = fallback_context_limit(latest_model)
+        source = "fallback_estimate"
+        compacted = False
+        raw_cats = []
+
+    free_tokens = max(0, limit_tokens - used_tokens) if limit_tokens > 0 else 0
+    used_pct = round(min(100.0, (used_tokens / limit_tokens) * 100.0), 1) if limit_tokens > 0 else None
+    free_pct = round(max(0.0, 100.0 - used_pct), 1) if used_pct is not None else None
+
+    categories = []
+    system_tokens = 0
+    chat_tokens = 0
+    for cat in raw_cats:
+        ctok = int(cat.get("tokens") or 0)
+        if cat.get("is_system"):
+            system_tokens += ctok
+        else:
+            chat_tokens += ctok
+        categories.append({
+            "name": cat["name"],
+            "category_id": cat.get("category_id", 0),
+            "is_system": bool(cat.get("is_system")),
+            "tokens": ctok,
+            "pct_of_limit": round((ctok / limit_tokens) * 100.0, 1) if limit_tokens > 0 else 0.0,
+            "pct_of_used": round((ctok / used_tokens) * 100.0, 1) if used_tokens > 0 else 0.0,
+            "item_count": cat.get("item_count", len(cat.get("items") or [])),
+            "items": cat.get("items") or [],
+        })
+    if not categories and used_tokens > 0:
+        chat_tokens = used_tokens
+
+    return {
+        "used_tokens": used_tokens,
+        "limit_tokens": limit_tokens,
+        "free_tokens": free_tokens,
+        "used_pct": used_pct,
+        "free_pct": free_pct,
+        "api_prompt_tokens": latest_api_prompt,
+        "system_tokens": system_tokens,
+        "chat_tokens": chat_tokens,
+        "compacted": compacted,
+        "source": source,
+        "categories": categories,
+    }
+
 
 def parse_session_db(db_path, surface="IDE", brain_dir=None):
     """Parses a single conversation SQLite database safely"""
@@ -403,10 +574,8 @@ def parse_session_db(db_path, surface="IDE", brain_dir=None):
         with closing(open_readonly_db(db_path)) as con:
             cur = con.cursor()
 
-            # 1. Extract model mappings & native context snapshot from gen_metadata
-            ctx_out = {}
-            gm_step_models, gm_id_models, gm_ordered_models, gm_fallback_rows = _extract_gen_metadata_models(cur, ctx_out=ctx_out)
-            latest_ctx = ctx_out.get("latest_ctx")
+            # 1. Extract model mappings & context telemetry from gen_metadata
+            gm_step_models, gm_id_models, gm_ordered_models, gm_fallback_rows, latest_ctx, ctx_by_step, ctx_ordered = _extract_gen_metadata(cur)
 
             # 1.5 Fallback executor_metadata model slugs
             exec_step_models = {}
@@ -426,6 +595,7 @@ def parse_session_db(db_path, surface="IDE", brain_dir=None):
             steps_data = []
             step_times = {}
             session_models_used = []
+            unresolved_model_steps = set()
             p15_ordinal = 0
             try:
                 rows = cur.execute(
@@ -473,14 +643,32 @@ def parse_session_db(db_path, surface="IDE", brain_dir=None):
                             if p15_ordinal < len(gm_ordered_models) and gm_ordered_models[p15_ordinal]
                             else None
                         )
-                        step_model = (
+                        resolved_model = (
                             gm_step_models.get(idx)
                             or ordered_model
                             or gm_id_models.get(model_id)
                             or MODEL_MAP.get(model_id)
                             or exec_step_models.get(idx)
-                            or "Gemini 3.8 Flash"
                         )
+                        if not resolved_model:
+                            unresolved_model_steps.add(len(steps_data))
+                        step_model = resolved_model or "Gemini 3.8 Flash"
+
+                        step_ctx = ctx_by_step.get(idx) or (
+                            ctx_ordered[p15_ordinal]
+                            if p15_ordinal < len(ctx_ordered) and ctx_ordered[p15_ordinal]
+                            else None
+                        )
+                        ctx_used = step_ctx.get("used") if step_ctx else None
+                        ctx_limit = (step_ctx.get("limit") if step_ctx else None) or (
+                            latest_ctx["limit_tokens"] if latest_ctx else None
+                        )
+                        ctx_pct = (
+                            round(min(100.0, (ctx_used / ctx_limit) * 100.0), 1)
+                            if (ctx_used is not None and ctx_limit and ctx_limit > 0)
+                            else None
+                        )
+
                         p15_ordinal += 1
                         session_models_used.append(step_model)
 
@@ -507,6 +695,9 @@ def parse_session_db(db_path, surface="IDE", brain_dir=None):
                             "e2e_dur": e_dur,
                             "stream_tps": stream_tps,
                             "e2e_tps": e2e_tps,
+                            "ctx_used": ctx_used,
+                            "ctx_limit": ctx_limit,
+                            "ctx_pct": ctx_pct,
                         })
                     except Exception:
                         pass
@@ -522,7 +713,10 @@ def parse_session_db(db_path, surface="IDE", brain_dir=None):
                     cached = usage.get(5, [('varint', 0)])[0][1]
                     text_out = usage.get(9, [('varint', 0)])[0][1]
                     thinking = usage.get(10, [('varint', 0)])[0][1]
-                    step_model = display_name or gm_id_models.get(model_id) or MODEL_MAP.get(model_id) or exec_step_models.get(gm_idx) or "Gemini 3.8 Flash"
+                    resolved_model = display_name or gm_id_models.get(model_id) or MODEL_MAP.get(model_id) or exec_step_models.get(gm_idx)
+                    if not resolved_model:
+                        unresolved_model_steps.add(len(steps_data))
+                    step_model = resolved_model or "Gemini 3.8 Flash"
                     session_models_used.append(step_model)
                     ts = step_times.get(gm_idx) or int(os.path.getmtime(db_path))
                     step_cache_pct = round((cached / (cached + inp)) * 100, 1) if (cached + inp) > 0 else 0.0
@@ -544,6 +738,9 @@ def parse_session_db(db_path, surface="IDE", brain_dir=None):
                         "think_sec": None,
                         "stream_tps": None,
                         "e2e_tps": None,
+                        "ctx_used": None,
+                        "ctx_limit": None,
+                        "ctx_pct": None,
                     })
 
             model_name = Counter(session_models_used).most_common(1)[0][0] if session_models_used else "Gemini 3.8 Flash"
@@ -593,6 +790,7 @@ def parse_session_db(db_path, surface="IDE", brain_dir=None):
     tool_errors = 0
     first_prompt = ""
     user_turns = 0
+    transcript_step_models = {}
     
     if transcript_path and os.path.exists(transcript_path):
         try:
@@ -610,6 +808,10 @@ def parse_session_db(db_path, surface="IDE", brain_dir=None):
                             clean_p = ' '.join(clean_p.split())
                             if clean_p:
                                 first_prompt = clean_p[:90]
+                        if stype == "PLANNER_RESPONSE" and step.get("model"):
+                            norm_tm = normalize_model_name(str(step.get("model")))
+                            if norm_tm and step.get("step_index") is not None:
+                                transcript_step_models[step.get("step_index")] = norm_tm
                         if "tool_calls" in step:
                             for tc in step["tool_calls"]:
                                 name = tc.get("name", tc.get("toolAction", "unknown"))
@@ -621,6 +823,18 @@ def parse_session_db(db_path, surface="IDE", brain_dir=None):
                         pass
         except Exception:
             pass
+
+    if unresolved_model_steps and transcript_step_models:
+        for pos in unresolved_model_steps:
+            st = steps_data[pos]
+            tm = transcript_step_models.get(st["idx"])
+            if tm:
+                st["model"] = tm
+        model_name = Counter(st["model"] for st in steps_data).most_common(1)[0][0]
+
+    latest_api_prompt = (steps_data[-1]["input_tokens"] + steps_data[-1]["cached_tokens"]) if steps_data else 0
+    latest_step_model = steps_data[-1]["model"] if steps_data else model_name
+    context_info = _build_session_context(latest_ctx, latest_api_prompt, latest_step_model)
 
     total_input = sum(s["input_tokens"] for s in steps_data)
     total_cached = sum(s["cached_tokens"] for s in steps_data)
@@ -667,6 +881,8 @@ def parse_session_db(db_path, surface="IDE", brain_dir=None):
         "schema_version": CACHE_SCHEMA_VERSION,
         "convo_id": convo_id,
         "mtime": db_mtime,
+        "last_active_ts": last_active_ts,
+        "last_active_at": datetime.fromtimestamp(last_active_ts).strftime('%Y-%m-%d %H:%M:%S'),
         "surface": surface,
         "created_at": datetime.fromtimestamp(start_ts).strftime('%Y-%m-%d %H:%M:%S'),
         "date": datetime.fromtimestamp(last_active_ts).strftime('%Y-%m-%d'),
@@ -700,6 +916,7 @@ def parse_session_db(db_path, surface="IDE", brain_dir=None):
         "valid_stream_dur": round(valid_stream_dur, 4),
         "valid_e2e_out": valid_e2e_out,
         "valid_e2e_dur": round(valid_e2e_dur, 4),
+        "context": context_info,
         "steps_detail": steps_data,
         "tool_counts": dict(tool_counts),
         "tool_errors": tool_errors
@@ -775,6 +992,7 @@ def _sync_all_sessions_unlocked(force=False):
                     and cached_entry.get("surface")
                     and cached_entry.get("schema_version") == CACHE_SCHEMA_VERSION
                     and "avg_ttft_sec" in cached_entry
+                    and "context" in cached_entry
                 ):
                     old_m = cached_entry.get("model", "")
                     if any(dep in old_m for dep in ["1.5", "2.5", "ID:", "Thinking Exp", "Flash 8B"]):
@@ -828,8 +1046,215 @@ def _sync_all_sessions_unlocked(force=False):
 
     return cached_sessions
 
-def generate_analytics(sessions, start_date=None, end_date=None, since_ts=None):
-    """Calculates comprehensive time-range statistics with cost, streaks, TTFT, TPS, and hourly flow"""
+ACTIVE_WINDOW_SEC = 120
+RECENT_WINDOW_SEC = 900
+
+
+def _calc_costs(inp, cached, out):
+    est_spend = (inp * RATE_INPUT + cached * RATE_CACHE + out * RATE_OUTPUT) / 1_000_000
+    cost_without_cache = ((inp + cached) * RATE_INPUT + out * RATE_OUTPUT) / 1_000_000
+    dollars_saved = max(0.0, cost_without_cache - est_spend)
+    savings_pct = (dollars_saved / cost_without_cache * 100) if cost_without_cache > 0 else 0.0
+    return {
+        "est_spend": round(est_spend, 2),
+        "cost_without_cache": round(cost_without_cache, 2),
+        "dollars_saved": round(dollars_saved, 2),
+        "savings_pct": round(savings_pct, 1),
+    }
+
+
+def _aggregate_models(session_list, total_tokens):
+    """Step-level model breakdown across a list of sessions."""
+    models = defaultdict(lambda: {
+        "input": 0, "cached": 0, "output": 0, "thinking": 0, "total": 0,
+        "turns": 0, "_sessions": set(), "_ttfts": [], "_s_tps": [],
+        "_s_out": 0, "_s_dur": 0.0, "_e_out": 0, "_e_dur": 0.0, "_thk_durs": []
+    })
+    for s in session_list:
+        cid = s.get("convo_id", "")
+        steps_det = s.get("steps_detail")
+        if steps_det:
+            for st in steps_det:
+                m = st.get("model", s.get("model", "Gemini 3.8 Flash"))
+                models[m]["input"] += st.get("input_tokens", 0)
+                models[m]["cached"] += st.get("cached_tokens", 0)
+                models[m]["output"] += st.get("output_tokens", 0)
+                models[m]["thinking"] += st.get("thinking_tokens", 0)
+                models[m]["total"] += st.get("total_tokens", 0)
+                models[m]["turns"] += 1
+                models[m]["_sessions"].add(cid)
+                if st.get("ttft_sec") is not None:
+                    models[m]["_ttfts"].append(st["ttft_sec"])
+                if st.get("stream_tps") is not None:
+                    models[m]["_s_tps"].append(st["stream_tps"])
+                models[m]["_s_out"] += st.get("stream_out", 0)
+                models[m]["_s_dur"] += st.get("stream_dur", 0.0)
+                models[m]["_e_out"] += st.get("e2e_out", 0)
+                models[m]["_e_dur"] += st.get("e2e_dur", 0.0)
+                if st.get("think_sec") is not None and st["think_sec"] > 0:
+                    models[m]["_thk_durs"].append(st["think_sec"])
+        else:
+            m = s.get("model", "Gemini 3.8 Flash")
+            models[m]["input"] += s.get("input_tokens", 0)
+            models[m]["cached"] += s.get("cached_tokens", 0)
+            models[m]["output"] += s.get("output_tokens", 0)
+            models[m]["thinking"] += s.get("thinking_tokens", 0)
+            models[m]["total"] += s.get("total_tokens", 0)
+            models[m]["turns"] += s.get("turn_count", 0)
+            models[m]["_sessions"].add(cid)
+
+    models_clean = {}
+    models_list = []
+    for k, v in models.items():
+        m_prompt = v["input"] + v["cached"]
+        m_cache_pct = round((v["cached"] / m_prompt) * 100, 1) if m_prompt > 0 else 0.0
+        m_avg_ttft = round(sum(v["_ttfts"]) / len(v["_ttfts"]), 3) if v["_ttfts"] else None
+        m_p50_ttft = percentile(v["_ttfts"], 50)
+        m_avg_stps = round(v["_s_out"] / v["_s_dur"], 1) if v["_s_dur"] > 0 else None
+        m_peak_stps = round(max(v["_s_tps"]), 1) if v["_s_tps"] else None
+        m_avg_etps = round(v["_e_out"] / v["_e_dur"], 1) if v["_e_dur"] > 0 else None
+        m_avg_thk = round(sum(v["_thk_durs"]) / len(v["_thk_durs"]), 3) if v["_thk_durs"] else None
+        entry = {
+            "name": k,
+            "total": v["total"],
+            "input": v["input"],
+            "cached": v["cached"],
+            "output": v["output"],
+            "thinking": v["thinking"],
+            "turns": v["turns"],
+            "sessions": len(v["_sessions"]),
+            "share_pct": round((v["total"] / total_tokens * 100) if total_tokens > 0 else 0, 1),
+            "cache_hit_rate_pct": m_cache_pct,
+            "avg_ttft_sec": m_avg_ttft,
+            "p50_ttft_sec": m_p50_ttft,
+            "avg_stream_tps": m_avg_stps,
+            "peak_stream_tps": m_peak_stps,
+            "avg_e2e_tps": m_avg_etps,
+            "avg_think_sec": m_avg_thk,
+        }
+        models_list.append(entry)
+        models_clean[k] = entry
+    models_list.sort(key=lambda x: x["total"], reverse=True)
+    return models_clean, models_list
+
+
+def _session_sort_key(s):
+    steps_det = s.get("steps_detail") or []
+    latest_ts = steps_det[-1].get("timestamp", 0) if steps_det else 0
+    return (float(s.get("last_active_ts") or s.get("mtime") or 0), latest_ts)
+
+
+def _format_step_summary(s, st):
+    ts = st.get("timestamp", 0)
+    return {
+        "convo_id": s.get("convo_id", ""),
+        "session_title": s.get("title", ""),
+        "project": s.get("project", "General"),
+        "idx": st.get("idx", 0),
+        "timestamp": ts,
+        "time_str": datetime.fromtimestamp(ts).strftime('%H:%M:%S') if ts else "",
+        "model": st.get("model", s.get("model", "")),
+        "input_tokens": st.get("input_tokens", 0),
+        "cached_tokens": st.get("cached_tokens", 0),
+        "output_tokens": st.get("output_tokens", 0),
+        "thinking_tokens": st.get("thinking_tokens", 0),
+        "total_tokens": st.get("total_tokens", 0),
+        "cache_hit_rate_pct": st.get("cache_hit_rate_pct", 0.0),
+        "ttft_sec": st.get("ttft_sec"),
+        "stream_sec": st.get("stream_sec"),
+        "e2e_sec": st.get("e2e_sec"),
+        "think_sec": st.get("think_sec"),
+        "stream_tps": st.get("stream_tps"),
+        "e2e_tps": st.get("e2e_tps"),
+        "ctx_used": st.get("ctx_used"),
+        "ctx_limit": st.get("ctx_limit"),
+        "ctx_pct": st.get("ctx_pct"),
+    }
+
+
+def _session_context_or_fallback(s):
+    ctx = s.get("context")
+    if isinstance(ctx, dict) and ctx.get("limit_tokens"):
+        return ctx
+    steps_det = s.get("steps_detail") or []
+    latest_prompt = (steps_det[-1].get("input_tokens", 0) + steps_det[-1].get("cached_tokens", 0)) if steps_det else s.get("input_tokens", 0)
+    latest_model = (steps_det[-1].get("model") if steps_det else None) or s.get("model", "")
+    return _build_session_context(None, latest_prompt, latest_model)
+
+
+def _build_selected_session(s, now_ts):
+    if not s:
+        return None
+    steps_det = s.get("steps_detail") or []
+    ttfts = [st["ttft_sec"] for st in steps_det if st.get("ttft_sec") is not None]
+    stps = [st["stream_tps"] for st in steps_det if st.get("stream_tps") is not None]
+    p50_stps = round(percentile(stps, 50), 1) if stps else None
+    min_ttft = round(min(ttfts), 3) if ttfts else None
+    max_ttft = round(max(ttfts), 3) if ttfts else None
+
+    inp = s.get("input_tokens", 0)
+    cached = s.get("cached_tokens", 0)
+    out = s.get("output_tokens", 0)
+    total_tok = s.get("total_tokens", inp + cached + out)
+    tool_counts = s.get("tool_counts") or {}
+    tool_errors = s.get("tool_errors", 0)
+    total_tool_calls = sum(tool_counts.values())
+    tool_success_rate = ((total_tool_calls - tool_errors) / total_tool_calls * 100) if total_tool_calls > 0 else 100.0
+    _, sess_models_list = _aggregate_models([s], total_tok)
+    ctx = _session_context_or_fallback(s)
+    last_active_at = s.get("last_active_at") or (
+        datetime.fromtimestamp(s["mtime"]).strftime('%Y-%m-%d %H:%M:%S') if s.get("mtime") else s.get("created_at", "")
+    )
+    latest_st = _format_step_summary(s, steps_det[-1]) if steps_det else None
+
+    return {
+        "convo_id": s["convo_id"],
+        "title": s.get("title", ""),
+        "project": s.get("project", "General"),
+        "workspace_path": s.get("workspace_path", ""),
+        "surface": s.get("surface", "IDE"),
+        "is_active": (now_ts - s.get("mtime", 0)) < ACTIVE_WINDOW_SEC,
+        "is_recent": (now_ts - s.get("mtime", 0)) < RECENT_WINDOW_SEC,
+        "date": s.get("date", ""),
+        "created_at": s.get("created_at", ""),
+        "last_active_at": last_active_at,
+        "mtime": s.get("mtime", 0),
+        "duration_sec": s.get("duration_sec", 0),
+        "model": s.get("model", ""),
+        "turn_count": s.get("turn_count", 0),
+        "input_tokens": inp,
+        "cached_tokens": cached,
+        "cache_hit_rate_pct": s.get("cache_hit_rate_pct", round((cached / (cached + inp) * 100) if (cached + inp) > 0 else 0, 1)),
+        "output_tokens": out,
+        "thinking_tokens": s.get("thinking_tokens", 0),
+        "total_tokens": total_tok,
+        "avg_ttft_sec": s.get("avg_ttft_sec"),
+        "p50_ttft_sec": s.get("p50_ttft_sec"),
+        "p90_ttft_sec": s.get("p90_ttft_sec"),
+        "min_ttft_sec": min_ttft,
+        "max_ttft_sec": max_ttft,
+        "avg_stream_tps": s.get("avg_stream_tps"),
+        "p50_stream_tps": p50_stps,
+        "peak_stream_tps": s.get("peak_stream_tps"),
+        "avg_e2e_tps": s.get("avg_e2e_tps"),
+        "avg_think_sec": s.get("avg_think_sec"),
+        "total_think_sec": s.get("total_think_sec", 0.0),
+        "think_steps": s.get("think_steps", 0),
+        "costs": _calc_costs(inp, cached, out),
+        "context": ctx,
+        "latest_step": latest_st,
+        "steps_detail": steps_det,
+        "models_list": sess_models_list,
+        "tool_counts": tool_counts,
+        "tool_errors": tool_errors,
+        "total_tool_calls": total_tool_calls,
+        "tool_success_rate_pct": round(tool_success_rate, 1),
+        "top_tools": sorted([{"name": k, "count": v} for k, v in tool_counts.items()], key=lambda x: x["count"], reverse=True)[:10],
+    }
+
+
+def generate_analytics(sessions, start_date=None, end_date=None, since_ts=None, convo_id=None):
+    """Calculates comprehensive time-range statistics and focused session telemetry"""
     filtered_sessions = []
     
     for s in sessions.values():
@@ -939,10 +1364,7 @@ def generate_analytics(sessions, start_date=None, end_date=None, since_ts=None):
     avg_think_sec = round(total_think_sec / len(all_think_durs), 3) if all_think_durs else None
     
     # Cost & Savings Calculation
-    est_spend = (total_input * RATE_INPUT + total_cached * RATE_CACHE + total_output * RATE_OUTPUT) / 1_000_000
-    cost_without_cache = ((total_input + total_cached) * RATE_INPUT + total_output * RATE_OUTPUT) / 1_000_000
-    dollars_saved = max(0.0, cost_without_cache - est_spend)
-    savings_pct = (dollars_saved / cost_without_cache * 100) if cost_without_cache > 0 else 0.0
+    costs_info = _calc_costs(total_input, total_cached, total_output)
 
     # Daily aggregation (including TTFT / TPS / Cache Hit Rate)
     daily = defaultdict(lambda: {
@@ -1016,76 +1438,7 @@ def generate_analytics(sessions, start_date=None, end_date=None, since_ts=None):
     tool_success_rate = ((total_calls - total_tool_errors) / total_calls * 100) if total_calls > 0 else 100.0
 
     # Model breakdown (step-level attribution when steps_detail is present)
-    models = defaultdict(lambda: {
-        "input": 0, "cached": 0, "output": 0, "thinking": 0, "total": 0,
-        "turns": 0, "_sessions": set(), "_ttfts": [], "_s_tps": [],
-        "_s_out": 0, "_s_dur": 0.0, "_e_out": 0, "_e_dur": 0.0, "_thk_durs": []
-    })
-    for s in filtered_sessions:
-        cid = s.get("convo_id", "")
-        steps_det = s.get("steps_detail")
-        if steps_det:
-            for st in steps_det:
-                m = st.get("model", s.get("model", "Gemini 3.8 Flash"))
-                models[m]["input"] += st.get("input_tokens", 0)
-                models[m]["cached"] += st.get("cached_tokens", 0)
-                models[m]["output"] += st.get("output_tokens", 0)
-                models[m]["thinking"] += st.get("thinking_tokens", 0)
-                models[m]["total"] += st.get("total_tokens", 0)
-                models[m]["turns"] += 1
-                models[m]["_sessions"].add(cid)
-                if st.get("ttft_sec") is not None:
-                    models[m]["_ttfts"].append(st["ttft_sec"])
-                if st.get("stream_tps") is not None:
-                    models[m]["_s_tps"].append(st["stream_tps"])
-                models[m]["_s_out"] += st.get("stream_out", 0)
-                models[m]["_s_dur"] += st.get("stream_dur", 0.0)
-                models[m]["_e_out"] += st.get("e2e_out", 0)
-                models[m]["_e_dur"] += st.get("e2e_dur", 0.0)
-                if st.get("think_sec") is not None and st["think_sec"] > 0:
-                    models[m]["_thk_durs"].append(st["think_sec"])
-        else:
-            m = s.get("model", "Gemini 3.8 Flash")
-            models[m]["input"] += s.get("input_tokens", 0)
-            models[m]["cached"] += s.get("cached_tokens", 0)
-            models[m]["output"] += s.get("output_tokens", 0)
-            models[m]["thinking"] += s.get("thinking_tokens", 0)
-            models[m]["total"] += s.get("total_tokens", 0)
-            models[m]["turns"] += s.get("turn_count", 0)
-            models[m]["_sessions"].add(cid)
-
-    models_clean = {}
-    models_list = []
-    for k, v in models.items():
-        m_prompt = v["input"] + v["cached"]
-        m_cache_pct = round((v["cached"] / m_prompt) * 100, 1) if m_prompt > 0 else 0.0
-        m_avg_ttft = round(sum(v["_ttfts"]) / len(v["_ttfts"]), 3) if v["_ttfts"] else None
-        m_p50_ttft = percentile(v["_ttfts"], 50)
-        m_avg_stps = round(v["_s_out"] / v["_s_dur"], 1) if v["_s_dur"] > 0 else None
-        m_peak_stps = round(max(v["_s_tps"]), 1) if v["_s_tps"] else None
-        m_avg_etps = round(v["_e_out"] / v["_e_dur"], 1) if v["_e_dur"] > 0 else None
-        m_avg_thk = round(sum(v["_thk_durs"]) / len(v["_thk_durs"]), 3) if v["_thk_durs"] else None
-        entry = {
-            "name": k,
-            "total": v["total"],
-            "input": v["input"],
-            "cached": v["cached"],
-            "output": v["output"],
-            "thinking": v["thinking"],
-            "turns": v["turns"],
-            "sessions": len(v["_sessions"]),
-            "share_pct": round((v["total"] / total_tokens * 100) if total_tokens > 0 else 0, 1),
-            "cache_hit_rate_pct": m_cache_pct,
-            "avg_ttft_sec": m_avg_ttft,
-            "p50_ttft_sec": m_p50_ttft,
-            "avg_stream_tps": m_avg_stps,
-            "peak_stream_tps": m_peak_stps,
-            "avg_e2e_tps": m_avg_etps,
-            "avg_think_sec": m_avg_thk,
-        }
-        models_list.append(entry)
-        models_clean[k] = entry
-    models_list.sort(key=lambda x: x["total"], reverse=True)
+    models_clean, models_list = _aggregate_models(filtered_sessions, total_tokens)
 
     # Surface breakdown
     surfaces = defaultdict(lambda: {"total": 0, "sessions": 0, "input": 0, "cached": 0, "output": 0})
@@ -1104,8 +1457,6 @@ def generate_analytics(sessions, start_date=None, end_date=None, since_ts=None):
     recent_5h = [s for s in sessions.values() if s.get("mtime", 0) >= cutoff_5h]
     window_tokens = sum(s.get("total_tokens", 0) for s in recent_5h)
     window_turns = sum(s.get("turn_count", 0) for s in recent_5h)
-    ACTIVE_WINDOW_SEC = 120
-    RECENT_WINDOW_SEC = 900
     is_active = any((now_ts - s.get("mtime", 0)) < ACTIVE_WINDOW_SEC for s in sessions.values())
     is_recent = any((now_ts - s.get("mtime", 0)) < RECENT_WINDOW_SEC for s in sessions.values())
 
@@ -1250,34 +1601,102 @@ def generate_analytics(sessions, start_date=None, end_date=None, since_ts=None):
             key = (st.get("timestamp", 0), s_mtime, st.get("idx", 0))
             if best_sort_key is None or key > best_sort_key:
                 best_sort_key = key
-                ts = st.get("timestamp", 0)
-                latest_step = {
-                    "convo_id": s.get("convo_id", ""),
-                    "session_title": s.get("title", ""),
-                    "project": s.get("project", "General"),
-                    "idx": st.get("idx", 0),
-                    "timestamp": ts,
-                    "time_str": datetime.fromtimestamp(ts).strftime('%H:%M:%S') if ts else "",
-                    "model": st.get("model", s.get("model", "")),
-                    "input_tokens": st.get("input_tokens", 0),
-                    "cached_tokens": st.get("cached_tokens", 0),
-                    "output_tokens": st.get("output_tokens", 0),
-                    "thinking_tokens": st.get("thinking_tokens", 0),
-                    "total_tokens": st.get("total_tokens", 0),
-                    "cache_hit_rate_pct": st.get("cache_hit_rate_pct", 0.0),
-                    "ttft_sec": st.get("ttft_sec"),
-                    "stream_sec": st.get("stream_sec"),
-                    "e2e_sec": st.get("e2e_sec"),
-                    "think_sec": st.get("think_sec"),
-                    "stream_tps": st.get("stream_tps"),
-                    "e2e_tps": st.get("e2e_tps"),
-                }
+                latest_step = _format_step_summary(s, st)
+
+    # All-session activity ordering for auto-tracking & session switcher (independent of date filter)
+    all_sorted_by_activity = sorted(sessions.values(), key=_session_sort_key, reverse=True)
+    auto_latest_id = all_sorted_by_activity[0]["convo_id"] if all_sorted_by_activity else None
+
+    if convo_id and convo_id in sessions:
+        selected_raw = sessions[convo_id]
+        selection_mode = "pinned"
+    else:
+        selected_raw = all_sorted_by_activity[0] if all_sorted_by_activity else None
+        selection_mode = "auto"
+
+    selected_session = _build_selected_session(selected_raw, now_ts)
+
+    sessions_index = []
+    for s in all_sorted_by_activity[:100]:
+        ctx = _session_context_or_fallback(s)
+        inp = s.get("input_tokens", 0)
+        cached = s.get("cached_tokens", 0)
+        last_active_at = s.get("last_active_at") or (
+            datetime.fromtimestamp(s["mtime"]).strftime('%Y-%m-%d %H:%M:%S') if s.get("mtime") else s.get("created_at", "")
+        )
+        sessions_index.append({
+            "convo_id": s["convo_id"],
+            "title": s.get("title", ""),
+            "project": s.get("project", "General"),
+            "surface": s.get("surface", "IDE"),
+            "model": s.get("model", ""),
+            "mtime": s.get("mtime", 0),
+            "created_at": s.get("created_at", ""),
+            "last_active_at": last_active_at,
+            "turn_count": s.get("turn_count", 0),
+            "total_tokens": s.get("total_tokens", 0),
+            "cache_hit_rate_pct": s.get("cache_hit_rate_pct", round((cached / (cached + inp) * 100) if (cached + inp) > 0 else 0, 1)),
+            "avg_ttft_sec": s.get("avg_ttft_sec"),
+            "avg_stream_tps": s.get("avg_stream_tps"),
+            "is_active": (now_ts - s.get("mtime", 0)) < ACTIVE_WINDOW_SEC,
+            "is_recent": (now_ts - s.get("mtime", 0)) < RECENT_WINDOW_SEC,
+            "ctx_used_pct": ctx.get("used_pct"),
+            "ctx_used_tokens": ctx.get("used_tokens"),
+            "ctx_limit_tokens": ctx.get("limit_tokens"),
+        })
+
+    recent_sessions_list = []
+    for s in sorted(filtered_sessions, key=_session_sort_key, reverse=True)[:200]:
+        ctx = _session_context_or_fallback(s)
+        inp = s.get("input_tokens", 0)
+        cached = s.get("cached_tokens", 0)
+        last_active_at = s.get("last_active_at") or (
+            datetime.fromtimestamp(s["mtime"]).strftime('%Y-%m-%d %H:%M:%S') if s.get("mtime") else s.get("created_at", "")
+        )
+        recent_sessions_list.append({
+            "convo_id": s["convo_id"],
+            "title": s["title"],
+            "project": s.get("project", "General"),
+            "workspace_path": s.get("workspace_path", ""),
+            "surface": s.get("surface", "IDE"),
+            "is_active": (now_ts - s.get("mtime", 0)) < ACTIVE_WINDOW_SEC,
+            "is_recent": (now_ts - s.get("mtime", 0)) < RECENT_WINDOW_SEC,
+            "date": s["date"],
+            "created_at": s["created_at"],
+            "last_active_at": last_active_at,
+            "mtime": s.get("mtime", 0),
+            "duration_sec": s["duration_sec"],
+            "turn_count": s["turn_count"],
+            "total_tokens": s["total_tokens"],
+            "input_tokens": inp,
+            "cached_tokens": cached,
+            "cache_hit_rate_pct": s.get("cache_hit_rate_pct", round((cached / (cached + inp) * 100) if (cached + inp) > 0 else 0, 1)),
+            "output_tokens": s["output_tokens"],
+            "thinking_tokens": s.get("thinking_tokens", 0),
+            "avg_ttft_sec": s.get("avg_ttft_sec"),
+            "p50_ttft_sec": s.get("p50_ttft_sec"),
+            "p90_ttft_sec": s.get("p90_ttft_sec"),
+            "avg_stream_tps": s.get("avg_stream_tps"),
+            "peak_stream_tps": s.get("peak_stream_tps"),
+            "avg_e2e_tps": s.get("avg_e2e_tps"),
+            "avg_think_sec": s.get("avg_think_sec"),
+            "total_think_sec": s.get("total_think_sec", 0.0),
+            "ctx_used_pct": ctx.get("used_pct"),
+            "steps_detail": s.get("steps_detail", []),
+            "tool_counts": s.get("tool_counts", {}),
+            "tool_errors": s.get("tool_errors", 0),
+            "model": s["model"],
+        })
 
     return {
         "time_range": {
             "start": start_date or (daily_list[0]["date"] if daily_list else ""),
             "end": end_date or (daily_list[-1]["date"] if daily_list else "")
         },
+        "auto_latest_id": auto_latest_id,
+        "selection_mode": selection_mode,
+        "sessions_index": sessions_index,
+        "selected_session": selected_session,
         "latest_step": latest_step,
         "summary": {
             "total_tokens": total_tokens,
@@ -1303,12 +1722,7 @@ def generate_analytics(sessions, start_date=None, end_date=None, since_ts=None):
             "avg_think_sec": avg_think_sec,
             "total_think_sec": total_think_sec,
         },
-        "costs": {
-            "est_spend": round(est_spend, 2),
-            "cost_without_cache": round(cost_without_cache, 2),
-            "dollars_saved": round(dollars_saved, 2),
-            "savings_pct": round(savings_pct, 1)
-        },
+        "costs": costs_info,
         "streaks": {
             "active_days": len(dates_list),
             "current_streak": current_streak,
@@ -1323,44 +1737,7 @@ def generate_analytics(sessions, start_date=None, end_date=None, since_ts=None):
         "surfaces": dict(surfaces),
         "projects": projects_list,
         "top_tools": sorted([{"name": k, "count": v} for k, v in all_tools.items()], key=lambda x: x["count"], reverse=True)[:15],
-        "recent_sessions": sorted(
-            [
-                {
-                    "convo_id": s["convo_id"],
-                    "title": s["title"],
-                    "project": s.get("project", "General"),
-                    "workspace_path": s.get("workspace_path", ""),
-                    "surface": s.get("surface", "IDE"),
-                    "is_active": (now_ts - s.get("mtime", 0)) < ACTIVE_WINDOW_SEC,
-                    "is_recent": (now_ts - s.get("mtime", 0)) < RECENT_WINDOW_SEC,
-                    "date": s["date"],
-                    "created_at": s["created_at"],
-                    "duration_sec": s["duration_sec"],
-                    "turn_count": s["turn_count"],
-                    "total_tokens": s["total_tokens"],
-                    "input_tokens": s["input_tokens"],
-                    "cached_tokens": s["cached_tokens"],
-                    "cache_hit_rate_pct": s.get("cache_hit_rate_pct", round((s["cached_tokens"] / (s["cached_tokens"] + s["input_tokens"]) * 100) if (s["cached_tokens"] + s["input_tokens"]) > 0 else 0, 1)),
-                    "output_tokens": s["output_tokens"],
-                    "thinking_tokens": s.get("thinking_tokens", 0),
-                    "avg_ttft_sec": s.get("avg_ttft_sec"),
-                    "p50_ttft_sec": s.get("p50_ttft_sec"),
-                    "p90_ttft_sec": s.get("p90_ttft_sec"),
-                    "avg_stream_tps": s.get("avg_stream_tps"),
-                    "peak_stream_tps": s.get("peak_stream_tps"),
-                    "avg_e2e_tps": s.get("avg_e2e_tps"),
-                    "avg_think_sec": s.get("avg_think_sec"),
-                    "total_think_sec": s.get("total_think_sec", 0.0),
-                    "steps_detail": s.get("steps_detail", []),
-                    "tool_counts": s.get("tool_counts", {}),
-                    "tool_errors": s.get("tool_errors", 0),
-                    "model": s["model"]
-                }
-                for s in filtered_sessions
-            ],
-            key=lambda x: x["created_at"],
-            reverse=True
-        )[:200]
+        "recent_sessions": recent_sessions_list,
     }
 
 
@@ -1426,7 +1803,7 @@ def _session_last_step_ts(s: dict) -> int:
 
 
 def _ensure_session_hud_fields(cid: str, s: dict, sessions: dict, demo: bool) -> dict:
-    if not demo and (s.get("ctx_limit") is None or "user_turns" not in s):
+    if not demo and ("user_turns" not in s or (s.get("context") is None and s.get("ctx_limit") is None)):
         db_path, surface, brain_dir = _find_db_path_for_convo(cid)
         if db_path:
             fresh = parse_session_db(db_path, surface=surface, brain_dir=brain_dir)
@@ -1437,6 +1814,15 @@ def _ensure_session_hud_fields(cid: str, s: dict, sessions: dict, demo: bool) ->
 
 
 def _compute_session_ctx(s: dict) -> tuple[int, int, float | None, str]:
+    ctx_obj = s.get("context")
+    if isinstance(ctx_obj, dict) and ctx_obj.get("limit_tokens"):
+        ctx_used = int(ctx_obj.get("used_tokens") or 0)
+        ctx_limit = int(ctx_obj.get("limit_tokens") or 0)
+        ctx_pct = ctx_obj.get("used_pct")
+        if ctx_pct is None and ctx_limit > 0:
+            ctx_pct = round(min(100.0, (ctx_used / ctx_limit) * 100.0), 1)
+        return ctx_used, ctx_limit, ctx_pct, ctx_obj.get("source") or "db_native"
+
     steps = s.get("steps_detail") or []
     last_step = steps[-1] if steps else None
     last_model = (last_step.get("model") if last_step else None) or s.get("model", "")
@@ -1631,39 +2017,141 @@ def build_demo_sessions():
     base = datetime.now().replace(hour=10, minute=30, second=0, microsecond=0)
     specs = [
         # days_ago, project, model, surface, turns, fresh_in, cached, out, think, duration_min, tools
-        (0, "Demo Shop", "Gemini 3.8 Flash", "IDE", 34, 41200, 812000, 18900, 5600, 95, {"run_command": 22, "view_file": 14, "replace_file_content": 9}),
+        (0, "Demo Shop", "Gemini 4 Neon (XHigh)", "Core", 34, 41200, 812000, 18900, 5600, 95, {"run_command": 22, "read_file": 14, "edit_file": 9}),
         (0, "Demo API", "Claude Sonnet 4.6", "CLI", 12, 18500, 204000, 7600, 2300, 41, {"run_command": 9, "grep_search": 6}),
-        (1, "Demo Shop", "Gemini 3.8 Flash", "IDE", 47, 52300, 1150000, 24100, 7100, 132, {"run_command": 31, "view_file": 19, "write_to_file": 7}),
-        (1, "Demo API", "Gemini 3.7 Flash", "IDE", 8, 9400, 88000, 3200, 900, 22, {"view_file": 5, "run_command": 4}),
-        (2, "Demo Shop", "Claude Sonnet 4.6", "CLI", 21, 27600, 402000, 11800, 3400, 64, {"run_command": 15, "grep_search": 8}),
-        (3, "Demo API", "Gemini 3.8 Flash", "Core", 15, 15800, 231000, 6900, 2100, 48, {"view_file": 11, "run_command": 6}),
-        (4, "Demo Shop", "Gemini 3.1 Pro", "IDE", 29, 38400, 689000, 16200, 4900, 88, {"replace_file_content": 13, "run_command": 17, "view_file": 10}),
+        (1, "Demo Shop", "Gemini 4 Hydrogen (High)", "IDE", 47, 52300, 1150000, 24100, 7100, 132, {"run_command": 31, "read_file": 19, "write_file": 7}),
+        (1, "Demo API", "Gemini 3.7 Flash", "IDE", 8, 9400, 88000, 3200, 900, 22, {"read_file": 5, "run_command": 4}),
+        (2, "Demo Shop", "Claude Opus 5.5 (Medium)", "Core", 21, 27600, 402000, 11800, 3400, 64, {"run_command": 15, "grep_search": 8}),
+        (3, "Demo API", "Gemini 3.8 Flash", "Core", 15, 15800, 231000, 6900, 2100, 48, {"read_file": 11, "run_command": 6}),
+        (4, "Demo Shop", "Gemini 3.1 Pro", "IDE", 29, 38400, 689000, 16200, 4900, 88, {"edit_file": 13, "run_command": 17, "read_file": 10}),
         (5, "Demo API", "Claude Sonnet 4.6", "CLI", 6, 7200, 64000, 2400, 700, 18, {"run_command": 5}),
-        (6, "Demo Shop", "Gemini 3.8 Flash", "IDE", 38, 44900, 934000, 20500, 6200, 110, {"run_command": 26, "view_file": 16, "write_to_file": 6}),
-        (6, "Demo API", "Gemini 3.7 Flash", "Core", 11, 12400, 142000, 5100, 1500, 35, {"grep_search": 7, "view_file": 5}),
+        (6, "Demo Shop", "Gemini 3.8 Flash", "IDE", 38, 44900, 934000, 20500, 6200, 110, {"run_command": 26, "read_file": 16, "write_file": 6}),
+        (6, "Demo API", "Gemini 3.7 Flash", "Core", 11, 12400, 142000, 5100, 1500, 35, {"grep_search": 7, "read_file": 5}),
     ]
     sessions = {}
     for i, (ago, project, model, surface, turns, inp, cached, out, think, dur_min, tools) in enumerate(specs):
         start = base - timedelta(days=ago)
         end = start + timedelta(minutes=dur_min)
         mtime = int(end.timestamp())
+        step_count = min(12, max(6, turns // 3))
+        limit_tok = fallback_context_limit(model)
+        steps_detail = []
+        base_prompt = 42_000 + i * 11_000
+        per_inp = max(1, inp // step_count)
+        per_cached = max(0, cached // step_count)
+        per_out = max(1, out // step_count)
+        per_think = max(0, think // step_count)
+
+        for k in range(step_count):
+            st_ts = int((start + timedelta(seconds=int((dur_min * 60) * (k + 1) / (step_count + 1)))).timestamp())
+            s_inp = inp - per_inp * (step_count - 1) if k == step_count - 1 else per_inp
+            s_cached = cached - per_cached * (step_count - 1) if k == step_count - 1 else per_cached
+            s_out = out - per_out * (step_count - 1) if k == step_count - 1 else per_out
+            s_think = think - per_think * (step_count - 1) if k == step_count - 1 else per_think
+            s_text = max(0, s_out - s_think)
+            ttft_sec = round(1.1 + ((i + k) % 5) * 0.28, 3)
+            stream_sec = round(max(0.8, s_out / (58.0 + ((k * 7) % 24))), 3)
+            e2e_sec = round(ttft_sec + stream_sec, 3)
+            think_sec = round(ttft_sec * 0.65, 3) if s_think > 0 else None
+            s_out_m, s_dur_m, e_out_m, e_dur_m, stps, etps = step_perf_metrics(s_out, s_text, s_think, stream_sec, e2e_sec)
+            c_used = min(limit_tok - 12_000, base_prompt + (k + 1) * 14_500)
+            steps_detail.append({
+                "idx": k * 3 + 1,
+                "timestamp": st_ts,
+                "date": datetime.fromtimestamp(st_ts).strftime('%Y-%m-%d'),
+                "model": model,
+                "input_tokens": s_inp,
+                "cached_tokens": s_cached,
+                "cache_hit_rate_pct": round((s_cached / (s_cached + s_inp)) * 100, 1) if (s_cached + s_inp) > 0 else 0.0,
+                "output_tokens": s_out,
+                "text_tokens": s_text,
+                "thinking_tokens": s_think,
+                "total_tokens": s_inp + s_cached + s_out,
+                "ttft_sec": ttft_sec,
+                "stream_sec": stream_sec,
+                "e2e_sec": e2e_sec,
+                "think_sec": think_sec,
+                "stream_out": s_out_m,
+                "stream_dur": s_dur_m,
+                "e2e_out": e_out_m,
+                "e2e_dur": e_dur_m,
+                "stream_tps": stps,
+                "e2e_tps": etps,
+                "ctx_used": c_used,
+                "ctx_limit": limit_tok,
+                "ctx_pct": round((c_used / limit_tok) * 100.0, 1),
+            })
+
+        last_ctx_used = steps_detail[-1]["ctx_used"]
+        sys_prompt_tok = 5200
+        tools_tok = 11000
+        skills_tok = 3350
+        subagents_tok = 2880
+        rules_tok = 1650
+        plugins_tok = 1640
+        mcp_tok = 620
+        chat_tok = max(8000, last_ctx_used - (sys_prompt_tok + tools_tok + skills_tok + subagents_tok + rules_tok + plugins_tok + mcp_tok))
+        demo_ctx_raw = {
+            "est_tokens": last_ctx_used,
+            "compacted_flag": 0,
+            "limit_tokens": limit_tok,
+            "categories": [
+                {"name": "Chat Messages", "category_id": 7, "is_system": False, "tokens": chat_tok, "item_count": len(steps_detail), "items": [{"name": f"{st['idx']}: PLANNER_RESPONSE", "tokens": max(400, chat_tok // len(steps_detail))} for st in steps_detail]},
+                {"name": "Tools", "category_id": 2, "is_system": True, "tokens": tools_tok, "item_count": 4, "items": [{"name": "run_command", "tokens": 3400}, {"name": "read_file", "tokens": 2800}, {"name": "edit_file", "tokens": 2600}, {"name": "search_web", "tokens": 2200}]},
+                {"name": "System Prompt", "category_id": 1, "is_system": True, "tokens": sys_prompt_tok, "item_count": 3, "items": [{"name": "artifacts", "tokens": 2100}, {"name": "plan_execute_protocol", "tokens": 1800}, {"name": "guidelines", "tokens": 1300}]},
+                {"name": "Skills", "category_id": 5, "is_system": True, "tokens": skills_tok, "item_count": 1, "items": [{"name": "skills", "tokens": skills_tok}]},
+                {"name": "Subagents", "category_id": 6, "is_system": True, "tokens": subagents_tok, "item_count": 1, "items": [{"name": "subagents", "tokens": subagents_tok}]},
+                {"name": "Rules", "category_id": 3, "is_system": True, "tokens": rules_tok, "item_count": 1, "items": [{"name": "user_rules", "tokens": rules_tok}]},
+                {"name": "Plugins", "category_id": 9, "is_system": True, "tokens": plugins_tok, "item_count": 1, "items": [{"name": "featured_plugins", "tokens": plugins_tok}]},
+                {"name": "Mcp Tools", "category_id": 4, "is_system": True, "tokens": mcp_tok, "item_count": 1, "items": [{"name": "mcp_servers", "tokens": mcp_tok}]},
+            ],
+        }
+        demo_ctx_raw["categories"].sort(key=lambda x: x["tokens"], reverse=True)
+
+        ttfts = [st["ttft_sec"] for st in steps_detail]
+        stps_list = [st["stream_tps"] for st in steps_detail if st["stream_tps"] is not None]
+        thk_durs = [st["think_sec"] for st in steps_detail if st["think_sec"] is not None]
+        v_s_out = sum(st["stream_out"] for st in steps_detail)
+        v_s_dur = sum(st["stream_dur"] for st in steps_detail)
+        v_e_out = sum(st["e2e_out"] for st in steps_detail)
+        v_e_dur = sum(st["e2e_dur"] for st in steps_detail)
+
         sessions[f"demo-session-{i:02d}"] = {
+            "schema_version": CACHE_SCHEMA_VERSION,
             "convo_id": f"demo-session-{i:02d}",
             "mtime": mtime,
+            "last_active_ts": mtime,
+            "last_active_at": end.strftime('%Y-%m-%d %H:%M:%S'),
             "surface": surface,
             "created_at": start.strftime('%Y-%m-%d %H:%M:%S'),
-            "date": start.strftime('%Y-%m-%d'),
+            "date": end.strftime('%Y-%m-%d'),
             "duration_sec": dur_min * 60,
             "model": model,
             "project": project,
             "workspace_path": "",
             "title": f"Demo: {project} task #{i + 1}",
-            "turn_count": turns,
+            "turn_count": len(steps_detail),
             "input_tokens": inp,
             "cached_tokens": cached,
+            "cache_hit_rate_pct": round((cached / (cached + inp)) * 100, 1) if (cached + inp) > 0 else 0.0,
             "output_tokens": out,
             "thinking_tokens": think,
             "total_tokens": inp + cached + out,
+            "avg_ttft_sec": round(sum(ttfts) / len(ttfts), 3),
+            "p50_ttft_sec": percentile(ttfts, 50),
+            "p90_ttft_sec": percentile(ttfts, 90),
+            "avg_stream_tps": round(v_s_out / v_s_dur, 1) if v_s_dur > 0 else None,
+            "peak_stream_tps": round(max(stps_list), 1) if stps_list else None,
+            "avg_e2e_tps": round(v_e_out / v_e_dur, 1) if v_e_dur > 0 else None,
+            "avg_think_sec": round(sum(thk_durs) / len(thk_durs), 3) if thk_durs else None,
+            "total_think_sec": round(sum(thk_durs), 3) if thk_durs else 0.0,
+            "think_steps": len(thk_durs),
+            "valid_stream_out": v_s_out,
+            "valid_stream_dur": round(v_s_dur, 4),
+            "valid_e2e_out": v_e_out,
+            "valid_e2e_dur": round(v_e_dur, 4),
+            "context": _build_session_context(demo_ctx_raw, steps_detail[-1]["input_tokens"] + steps_detail[-1]["cached_tokens"], model),
+            "steps_detail": steps_detail,
             "tool_counts": tools,
             "tool_errors": 1 if i % 4 == 0 else 0,
         }

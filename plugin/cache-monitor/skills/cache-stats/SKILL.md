@@ -37,4 +37,4 @@ Metrics reported:
 
 ## Interactive Dashboard
 
-When this plugin is enabled, you can also open the interactive Telemetry Dashboard sidecar directly inside Antigravity using `[Telemetry Dashboard](sidecar://cache-monitor/telemetry/)`, or in any browser at `http://127.0.0.1:8765/`.
+When this plugin is enabled, you can open and pin (`Pin Tab`) the interactive **Telemetry Dashboard** sidecar directly inside Antigravity App's auxiliary pane using `[Telemetry Dashboard](sidecar://cache-monitor/telemetry/)`, or in any browser at `http://127.0.0.1:8765/`. It auto-tracks the latest active conversation (with a searchable session switcher), pins a sticky top summary (`ctx%` ring, `TTFT`, `Cache Hit`, `Token/s`, `Total Tokens`), and provides tabbed category views (`概览`, `上下文`, `单步瀑布`, `模型`, `全局趋势`) without installing any lifecycle hooks.
