@@ -3,7 +3,7 @@
   "args": ["main.mjs"],
   "restart_policy": "always",
   "display_name": "Telemetry Dashboard",
-  "description": "Real-time Antigravity telemetry sidecar showing TPS, TTFT, cache hit rate, thinking time, and per-model token usage.",
+  "description": "Antigravity App aux_pane telemetry sidecar with sticky summary (TTFT, cache hit, TPS, total tokens, ctx% ring), auto-tracking latest session & switcher, and tabbed category views.",
   "has_web_ui": true,
   "ui_config": {
     "display_name": "Telemetry Dashboard",

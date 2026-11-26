@@ -2,10 +2,8 @@
   "name": "cache-monitor",
   "displayName": "Token Cache Monitor",
   "version": "1.1.0",
-  "description": "Self-contained Antigravity Telemetry Dashboard sidecar and on-demand Context Caching & token usage inspection skill (TTFT, Stream/E2E TPS, cache hit rate, thinking time, and per-model usage).",
+  "description": "Self-contained Antigravity App aux_pane Telemetry Dashboard sidecar and cache-stats skill featuring a sticky live summary bar (TTFT, cache hit, TPS, total tokens, context window % ring), auto-tracking latest session with switcher, and tabbed category views.",
   "logo": "assets/logo.svg",
-  "homepage": "https://github.com/duppjuzo/antigravity-telemetry-bundle",
-  "repository": "https://github.com/duppjuzo/antigravity-telemetry-bundle",
   "suggestedPrompts": [
     "Inspect my current session prompt cache hit rate and token usage",
     "Summarize today's token usage, cache savings, and TTFT/TPS across models",
