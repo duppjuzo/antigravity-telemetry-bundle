@@ -81,7 +81,7 @@ chmod +x install.sh uninstall.sh
 ### 3. Linux（Ubuntu / Debian / Fedora / Arch / WSL2 / 远程服务器）
 
 ```bash
-tar -xzf antigravity-telemetry-bundle-v1.1.0.tar.gz
+tar -xzf antigravity-telemetry-bundle-v1.1.1.tar.gz
 cd antigravity-telemetry-bundle
 ./install.sh
 ```
@@ -140,7 +140,16 @@ docker run -d --name antigravity-telemetry \
   # Windows PowerShell
   .\install.ps1 --plugin-only
   ```
-- **或**直接将 `plugin/cache-monitor` 文件夹（或 `dist/cache-monitor-plugin-v1.1.0.zip` 解压后）放入 `~/.gemini/config/plugins/cache-monitor` 即可！
+- **或**直接将 `plugin/cache-monitor` 文件夹（或 `dist/cache-monitor-plugin-v1.1.1.zip` 解压后）放入 `~/.gemini/config/plugins/cache-monitor` 即可！
+
+---
+
+### 6. Windows 跟随式悬浮胶囊条（HUD）
+
+提供零第三方依赖的 Windows 桌面无边框悬浮小条（基于 Python 标准库 `tkinter` 与 Win32 API，通过 `/api/hud` 实时拉取数据）：
+
+- **启动方式**：直接双击根目录或插件目录下的 [`launch_hud.bat`](./launch_hud.bat)（或运行 `pythonw plugin/cache-monitor/server/hud_overlay.py`）。
+- **核心能力**：自动跟随并吸附在 Antigravity 窗口上方（最小化或切窗时自动隐藏），实时展示当前窗口对话的 **缓存命中率**、**TPS**、**TTFT**、**轮数/步数** 与 **总 Token / 原生上下文占比**；支持鼠标拖拽记忆位置、悬停展开详情卡片、点击/右键切换或锁定会话以及深/浅色主题切换。
 
 ---
 
@@ -185,6 +194,7 @@ antigravity-telemetry-bundle/
 ├── install.sh / uninstall.sh    # macOS & Linux 一键部署/卸载脚本
 ├── install.ps1 / uninstall.ps1  # Windows PowerShell 一键部署/卸载脚本
 ├── install.bat / uninstall.bat  # Windows 双击一键部署/卸载入口
+├── launch_hud.bat               # Windows 跟随式悬浮胶囊条启动脚本
 ├── Dockerfile                   # 多架构零依赖镜像
 ├── docker-compose.yml           # Docker Compose 一键编排
 ├── .env.example                 # Docker 环境变量模板
@@ -193,6 +203,7 @@ antigravity-telemetry-bundle/
     └── cache-monitor/           # 完全自包含的 Antigravity 插件
         ├── plugin.json          # 插件清单
         ├── hooks.json           # 跨平台 Hook 配置（默认关闭）
+        ├── launch_hud.bat       # 插件内悬浮窗快捷启动入口
         ├── run_hook.mjs         # 跨平台 Hook/CLI 启动器
         ├── cache_hook.py        # 会话缓存与遥测摘要脚本
         ├── assets/logo.svg      # 插件图标
@@ -200,7 +211,8 @@ antigravity-telemetry-bundle/
         ├── sidecars/telemetry/  # 跨平台 Sidecar 启动器与清单
         └── server/              # 内嵌 Telemetry 服务核心
             ├── collector.py     # SQLite Protobuf/WAL 遥测采集引擎
-            ├── server.py        # 多线程 HTTP 服务与 REST API
+            ├── server.py        # 多线程 HTTP 服务与 REST API（含 /api/hud）
             ├── ensure_server.py # 跨平台无窗口后台守护启动器
+            ├── hud_overlay.py   # Windows 悬浮 HUD 胶囊窗
             └── web_dashboard.html # 零外网依赖暗色主题交互面板
 ```

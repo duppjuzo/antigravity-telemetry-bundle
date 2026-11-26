@@ -138,6 +138,18 @@ MODEL_MAP = {
     1669: "Gemini Flash",
 }
 
+def fallback_context_limit(model_name):
+    """Fallback context window limit when gen_metadata lacks a native limit."""
+    m = (model_name or "").lower()
+    if "opus 5.5" in m or "opus-5-5" in m or "opus-5.5" in m:
+        return 840_000
+    if "claude" in m:
+        return 200_000
+    if "gemini 4" in m or "orchestrator" in m:
+        return 512_000
+    return 1_048_576
+
+
 # Pricing per 1M tokens (Standard Gemini Flash reference model)
 RATE_INPUT = 0.10
 RATE_CACHE = 0.025
@@ -260,7 +272,7 @@ def percentile(values, p):
     return round(val, 3)
 
 def get_effective_db_mtime(db_path):
-    """Returns max mtime of .db and its active SQLite -wal file for live detection."""
+    """Returns max mtime of .db and non-empty SQLite -wal file for live detection."""
     try:
         mt = os.path.getmtime(db_path)
     except OSError:
@@ -268,7 +280,9 @@ def get_effective_db_mtime(db_path):
     wal_path = db_path + "-wal"
     if os.path.exists(wal_path):
         try:
-            mt = max(mt, os.path.getmtime(wal_path))
+            # Read-only SQLite connections may create an empty 0-byte -wal file; ignore it.
+            if os.path.getsize(wal_path) > 0:
+                mt = max(mt, os.path.getmtime(wal_path))
         except OSError:
             pass
     return mt
@@ -294,12 +308,33 @@ def open_readonly_db(db_path):
         imm_uri = f"{db_uri}?mode=ro&immutable=1"
         return sqlite3.connect(imm_uri, uri=True, timeout=2.0)
 
-def _extract_gen_metadata_models(cur):
+def _parse_context_snapshot(sub1):
+    """Extracts native context window usage and limit from gen_metadata sub1[9][10]."""
+    if 9 not in sub1 or not sub1[9]:
+        return None
+    k9 = parse_proto(sub1[9][0][1])
+    if 10 not in k9 or not k9[10]:
+        return None
+    k9_10 = parse_proto(k9[10][0][1])
+    est_tokens = k9_10.get(1, [('varint', 0)])[0][1]
+    compacted_flag = k9_10.get(2, [('varint', 0)])[0][1]
+    limit_tokens = k9_10.get(4, [('varint', 0)])[0][1]
+    if est_tokens <= 0 and limit_tokens <= 0:
+        return None
+    return {
+        "est_tokens": est_tokens,
+        "compacted_flag": compacted_flag,
+        "limit_tokens": limit_tokens,
+    }
+
+
+def _extract_gen_metadata_models(cur, ctx_out=None):
     """Extracts exact step->model, ordered model list, and model_id->model mappings from gen_metadata protobuf fields (19/20/21)."""
     gm_step_models = {}
     gm_id_models = {}
     gm_ordered_models = []
     fallback_rows = []
+    latest_ctx = None
     try:
         rows = cur.execute('SELECT idx, data FROM gen_metadata ORDER BY idx ASC').fetchall()
         for gm_idx, data in rows:
@@ -334,6 +369,10 @@ def _extract_gen_metadata_models(cur):
                             if k == 'last_step_index' and v.isdigit():
                                 last_step_idx = int(v)
 
+                    ctx_snap = _parse_context_snapshot(sub1)
+                    if ctx_snap is not None:
+                        latest_ctx = ctx_snap
+
                     if display_name:
                         if model_id:
                             gm_id_models[model_id] = display_name
@@ -348,6 +387,8 @@ def _extract_gen_metadata_models(cur):
                 pass
     except Exception:
         pass
+    if ctx_out is not None:
+        ctx_out["latest_ctx"] = latest_ctx
     return gm_step_models, gm_id_models, gm_ordered_models, fallback_rows
 
 def parse_session_db(db_path, surface="IDE", brain_dir=None):
@@ -356,13 +397,16 @@ def parse_session_db(db_path, surface="IDE", brain_dir=None):
         return None
 
     convo_id = os.path.splitext(os.path.basename(db_path))[0]
+    db_mtime = get_effective_db_mtime(db_path)
     
     try:
         with closing(open_readonly_db(db_path)) as con:
             cur = con.cursor()
 
-            # 1. Extract model mappings from gen_metadata (exact protobuf fields, no prompt regex pollution)
-            gm_step_models, gm_id_models, gm_ordered_models, gm_fallback_rows = _extract_gen_metadata_models(cur)
+            # 1. Extract model mappings & native context snapshot from gen_metadata
+            ctx_out = {}
+            gm_step_models, gm_id_models, gm_ordered_models, gm_fallback_rows = _extract_gen_metadata_models(cur, ctx_out=ctx_out)
+            latest_ctx = ctx_out.get("latest_ctx")
 
             # 1.5 Fallback executor_metadata model slugs
             exec_step_models = {}
@@ -548,6 +592,7 @@ def parse_session_db(db_path, surface="IDE", brain_dir=None):
     tool_counts = defaultdict(int)
     tool_errors = 0
     first_prompt = ""
+    user_turns = 0
     
     if transcript_path and os.path.exists(transcript_path):
         try:
@@ -557,6 +602,8 @@ def parse_session_db(db_path, surface="IDE", brain_dir=None):
                         step = json.loads(line)
                         stype = step.get("type", "")
                         status = step.get("status", "")
+                        if stype == "USER_INPUT":
+                            user_turns += 1
                         if stype == "USER_INPUT" and not first_prompt:
                             raw_p = step.get("content", "")
                             clean_p = re.sub(r'<[^>]+>', ' ', raw_p).strip()
@@ -599,13 +646,23 @@ def parse_session_db(db_path, surface="IDE", brain_dir=None):
     avg_think_sec = round(total_think_sec / len(think_durs), 3) if think_durs else None
     cache_hit_rate = round((total_cached / (total_cached + total_input)) * 100, 1) if (total_cached + total_input) > 0 else 0.0
 
-    db_mtime = get_effective_db_mtime(db_path)
     start_ts = steps_data[0]["timestamp"] if steps_data else int(db_mtime)
     end_ts = steps_data[-1]["timestamp"] if steps_data else start_ts
-    # Use the LATEST of (last step timestamp, db mtime) as the session's active date.
-    # This ensures sessions that span midnight always appear in the correct day's view.
-    last_active_ts = max(end_ts, int(db_mtime))
+    last_active_ts = end_ts if end_ts > 0 else int(db_mtime)
     
+    last_step = steps_data[-1]
+    last_prompt = last_step.get("input_tokens", 0) + last_step.get("cached_tokens", 0)
+    last_model = last_step.get("model", model_name)
+    if latest_ctx:
+        ctx_used = latest_ctx["est_tokens"] or last_prompt
+        ctx_limit = latest_ctx["limit_tokens"] or fallback_context_limit(last_model)
+        ctx_source = "db_native"
+    else:
+        ctx_used = last_prompt
+        ctx_limit = fallback_context_limit(last_model)
+        ctx_source = "fallback_estimate"
+    ctx_pct = round(min(100.0, (ctx_used / ctx_limit) * 100.0), 1) if ctx_limit > 0 else None
+
     return {
         "schema_version": CACHE_SCHEMA_VERSION,
         "convo_id": convo_id,
@@ -618,6 +675,7 @@ def parse_session_db(db_path, surface="IDE", brain_dir=None):
         "project": project_name,
         "workspace_path": workspace_path,
         "title": first_prompt if first_prompt else f"Session {convo_id[:8]}",
+        "user_turns": user_turns if user_turns > 0 else None,
         "turn_count": len(steps_data),
         "input_tokens": total_input,
         "cached_tokens": total_cached,
@@ -625,6 +683,10 @@ def parse_session_db(db_path, surface="IDE", brain_dir=None):
         "output_tokens": total_output,
         "thinking_tokens": total_thinking,
         "total_tokens": total_input + total_cached + total_output,
+        "ctx_used": ctx_used,
+        "ctx_limit": ctx_limit,
+        "ctx_pct": ctx_pct,
+        "ctx_source": ctx_source,
         "avg_ttft_sec": avg_ttft,
         "p50_ttft_sec": p50_ttft,
         "p90_ttft_sec": p90_ttft,
@@ -649,6 +711,9 @@ def sync_all_sessions(force=False):
         return _sync_all_sessions_unlocked(force=force)
 
 
+_MEM_CACHE = {"path": None, "mtime_ns": None, "size": None, "data": None}
+
+
 def _sync_all_sessions_unlocked(force=False):
     cache_file = get_cache_file()
     fallback_file = _fallback_cache_file()
@@ -659,8 +724,23 @@ def _sync_all_sessions_unlocked(force=False):
         for cf in read_candidates:
             if os.path.exists(cf):
                 try:
+                    st = os.stat(cf)
+                    if (
+                        _MEM_CACHE["data"] is not None
+                        and _MEM_CACHE["path"] == cf
+                        and _MEM_CACHE["mtime_ns"] == st.st_mtime_ns
+                        and _MEM_CACHE["size"] == st.st_size
+                    ):
+                        cache = _MEM_CACHE["data"]
+                        break
                     with open(cf, 'r', encoding='utf-8') as f:
                         cache = json.load(f)
+                    _MEM_CACHE.update({
+                        "path": cf,
+                        "mtime_ns": st.st_mtime_ns,
+                        "size": st.st_size,
+                        "data": cache,
+                    })
                     break
                 except Exception:
                     cache = {"sessions": {}, "last_sync": 0}
@@ -724,6 +804,16 @@ def _sync_all_sessions_unlocked(force=False):
                 with open(tmp_file, 'w', encoding='utf-8') as f:
                     json.dump(cache, f)
                 os.replace(tmp_file, target_cf)
+                try:
+                    st = os.stat(target_cf)
+                    _MEM_CACHE.update({
+                        "path": target_cf,
+                        "mtime_ns": st.st_mtime_ns,
+                        "size": st.st_size,
+                        "data": cache,
+                    })
+                except OSError:
+                    pass
                 wrote = True
                 break
             except Exception as e:
@@ -1272,6 +1362,267 @@ def generate_analytics(sessions, start_date=None, end_date=None, since_ts=None):
             reverse=True
         )[:200]
     }
+
+
+def _normalize_window_title(title: str | None) -> str:
+    if not title:
+        return ""
+    cleaned = title.strip()
+    for suffix in (
+        " - Google Antigravity",
+        " — Google Antigravity",
+        " - Antigravity",
+        " — Antigravity",
+        " | Antigravity",
+    ):
+        if cleaned.lower().endswith(suffix.lower()):
+            cleaned = cleaned[: -len(suffix)].strip()
+            break
+    return cleaned
+
+
+def load_conversation_summaries() -> dict[str, dict]:
+    """Reads conversation titles and live run statuses from Antigravity's conversation_summaries.db."""
+    db_path = os.path.join(get_gemini_home(), "antigravity", "conversation_summaries.db")
+    if not os.path.exists(db_path):
+        return {}
+    result: dict[str, dict] = {}
+    try:
+        with closing(open_readonly_db(db_path)) as con:
+            rows = con.execute(
+                "SELECT conversation_id, title, preview, step_count, status, last_modified_time "
+                "FROM conversation_summaries"
+            ).fetchall()
+            for cid, title, preview, step_count, status, lmt in rows:
+                if not cid:
+                    continue
+                result[str(cid)] = {
+                    "title": (title or preview or "").strip(),
+                    "status": (status or "").strip(),
+                    "step_count": int(step_count or 0),
+                    "last_modified_time": (lmt or "").strip(),
+                }
+    except Exception:
+        return {}
+    return result
+
+
+def _find_db_path_for_convo(convo_id: str) -> tuple[str | None, str, str | None]:
+    for src in get_data_sources():
+        root = src["root"]
+        db_path = os.path.join(root, "conversations", f"{convo_id}.db")
+        if os.path.exists(db_path) and os.path.getsize(db_path) > 0:
+            return db_path, src["name"], os.path.join(root, "brain")
+    return None, "Core", None
+
+
+def _session_last_step_ts(s: dict) -> int:
+    steps = s.get("steps_detail") or []
+    if steps:
+        ts = steps[-1].get("timestamp")
+        if ts:
+            return int(ts)
+    return int(s.get("mtime", 0))
+
+
+def _ensure_session_hud_fields(cid: str, s: dict, sessions: dict, demo: bool) -> dict:
+    if not demo and (s.get("ctx_limit") is None or "user_turns" not in s):
+        db_path, surface, brain_dir = _find_db_path_for_convo(cid)
+        if db_path:
+            fresh = parse_session_db(db_path, surface=surface, brain_dir=brain_dir)
+            if fresh:
+                sessions[cid] = fresh
+                return fresh
+    return s
+
+
+def _compute_session_ctx(s: dict) -> tuple[int, int, float | None, str]:
+    steps = s.get("steps_detail") or []
+    last_step = steps[-1] if steps else None
+    last_model = (last_step.get("model") if last_step else None) or s.get("model", "")
+    last_prompt = (
+        (last_step.get("input_tokens", 0) + last_step.get("cached_tokens", 0))
+        if last_step
+        else s.get("input_tokens", 0)
+    )
+    ctx_used = s.get("ctx_used")
+    ctx_limit = s.get("ctx_limit")
+    ctx_source = s.get("ctx_source")
+    if ctx_used is None or not ctx_limit:
+        ctx_used = last_prompt
+        ctx_limit = fallback_context_limit(last_model)
+        ctx_source = "fallback_estimate"
+    ctx_pct = s.get("ctx_pct")
+    if ctx_pct is None and ctx_limit > 0:
+        ctx_pct = round(min(100.0, (ctx_used / ctx_limit) * 100.0), 1)
+    return int(ctx_used), int(ctx_limit), ctx_pct, ctx_source or "fallback_estimate"
+
+
+def get_hud_snapshot(convo_id=None, window_title=None, force=False, demo=False):
+    """Returns a lightweight HUD snapshot matching the active Antigravity window or latest session."""
+    sessions = build_demo_sessions() if demo else sync_all_sessions(force=force)
+    summaries = {} if demo else load_conversation_summaries()
+    now_ts = int(datetime.now().timestamp())
+
+    def _is_running(cid: str, s: dict) -> bool:
+        if cid in summaries:
+            return summaries[cid].get("status") == "CASCADE_RUN_STATUS_RUNNING"
+        return (now_ts - _session_last_step_ts(s)) < 30
+
+    def _sort_key(cid: str, s: dict) -> tuple[int, int]:
+        last_ts = _session_last_step_ts(s)
+        running_recent = 1 if (_is_running(cid, s) and (now_ts - last_ts) < 600) else 0
+        return (running_recent, last_ts)
+
+    target_cid = None
+    matched_by = "none"
+
+    if convo_id and convo_id in sessions:
+        target_cid = convo_id
+        matched_by = "pinned"
+    else:
+        norm_title = _normalize_window_title(window_title)
+        norm_low = norm_title.lower()
+        ignore_titles = {"", "antigravity", "new conversation", "olemainthreadwndname"}
+
+        if norm_low not in ignore_titles and sessions:
+            exact_hits = []
+            partial_hits = []
+            for cid, s in sessions.items():
+                sum_title = (summaries.get(cid) or {}).get("title", "")
+                sess_title = s.get("title", "")
+                for cand in (sum_title, sess_title):
+                    c_low = (cand or "").strip().lower()
+                    if not c_low:
+                        continue
+                    if c_low == norm_low:
+                        exact_hits.append((_sort_key(cid, s), cid))
+                        break
+                    if len(norm_low) >= 4 and (
+                        c_low.startswith(norm_low)
+                        or norm_low.startswith(c_low)
+                        or norm_low in c_low
+                    ):
+                        overlap = min(len(norm_low), len(c_low))
+                        partial_hits.append((overlap, _sort_key(cid, s), cid))
+                        break
+
+            if exact_hits:
+                exact_hits.sort(reverse=True)
+                target_cid = exact_hits[0][1]
+                matched_by = "window_title"
+            elif partial_hits:
+                partial_hits.sort(reverse=True)
+                target_cid = partial_hits[0][2]
+                matched_by = "window_title"
+
+        if target_cid is None and sessions:
+            best_cid = max(sessions.keys(), key=lambda cid: _sort_key(cid, sessions[cid]))
+            target_cid = best_cid
+            matched_by = "latest_active"
+
+    active_payload = None
+    if target_cid and target_cid in sessions:
+        s = _ensure_session_hud_fields(target_cid, sessions[target_cid], sessions, demo)
+        steps = s.get("steps_detail") or []
+        last_step = steps[-1] if steps else None
+        last_ts = _session_last_step_ts(s)
+        sum_title = (summaries.get(target_cid) or {}).get("title", "")
+        display_title = sum_title or s.get("title", f"Session {target_cid[:8]}")
+        ctx_used, ctx_limit, ctx_pct, ctx_source = _compute_session_ctx(s)
+
+        inp = int(s.get("input_tokens", 0))
+        cached = int(s.get("cached_tokens", 0))
+        sess_cache_hit = s.get(
+            "cache_hit_rate_pct",
+            round((cached / (cached + inp)) * 100, 1) if (cached + inp) > 0 else 0.0,
+        )
+        last_cache_hit = (
+            last_step.get("cache_hit_rate_pct")
+            if last_step and last_step.get("cache_hit_rate_pct") is not None
+            else sess_cache_hit
+        )
+        stream_tps = (
+            last_step.get("stream_tps")
+            if last_step and last_step.get("stream_tps") is not None
+            else s.get("avg_stream_tps")
+        )
+        e2e_tps = (
+            last_step.get("e2e_tps")
+            if last_step and last_step.get("e2e_tps") is not None
+            else s.get("avg_e2e_tps")
+        )
+        ttft_sec = (
+            last_step.get("ttft_sec")
+            if last_step and last_step.get("ttft_sec") is not None
+            else s.get("avg_ttft_sec")
+        )
+
+        active_payload = {
+            "convo_id": target_cid,
+            "title": display_title,
+            "project": s.get("project", "General"),
+            "model": (last_step.get("model") if last_step else None) or s.get("model", ""),
+            "is_running": _is_running(target_cid, s),
+            "cache_hit_rate_pct": sess_cache_hit,
+            "last_cache_hit_rate_pct": last_cache_hit,
+            "stream_tps": stream_tps,
+            "avg_stream_tps": s.get("avg_stream_tps"),
+            "e2e_tps": e2e_tps,
+            "ttft_sec": ttft_sec,
+            "avg_ttft_sec": s.get("avg_ttft_sec"),
+            "user_turns": s.get("user_turns"),
+            "step_count": int(s.get("turn_count", 0)),
+            "total_tokens": int(s.get("total_tokens", 0)),
+            "input_tokens": inp,
+            "cached_tokens": cached,
+            "output_tokens": int(s.get("output_tokens", 0)),
+            "thinking_tokens": int(s.get("thinking_tokens", 0)),
+            "ctx_used": ctx_used,
+            "ctx_limit": ctx_limit,
+            "ctx_pct": ctx_pct,
+            "ctx_source": ctx_source,
+            "last_step_time": datetime.fromtimestamp(last_ts).strftime("%H:%M:%S") if last_ts else "",
+        }
+
+    ordered_cids = sorted(
+        sessions.keys(),
+        key=lambda cid: (_session_last_step_ts(sessions[cid]), 1 if _is_running(cid, sessions[cid]) else 0),
+        reverse=True,
+    )[:15]
+    sessions_list = []
+    for cid in ordered_cids:
+        s = sessions[cid]
+        last_ts = _session_last_step_ts(s)
+        sum_title = (summaries.get(cid) or {}).get("title", "")
+        inp = int(s.get("input_tokens", 0))
+        cached = int(s.get("cached_tokens", 0))
+        sess_cache_hit = s.get(
+            "cache_hit_rate_pct",
+            round((cached / (cached + inp)) * 100, 1) if (cached + inp) > 0 else 0.0,
+        )
+        _, _, c_pct, _ = _compute_session_ctx(s)
+        sessions_list.append({
+            "convo_id": cid,
+            "title": sum_title or s.get("title", f"Session {cid[:8]}"),
+            "project": s.get("project", "General"),
+            "model": s.get("model", ""),
+            "is_running": _is_running(cid, s),
+            "cache_hit_rate_pct": sess_cache_hit,
+            "total_tokens": int(s.get("total_tokens", 0)),
+            "user_turns": s.get("user_turns"),
+            "step_count": int(s.get("turn_count", 0)),
+            "ctx_pct": c_pct,
+            "last_step_time": datetime.fromtimestamp(last_ts).strftime("%H:%M:%S") if last_ts else "",
+        })
+
+    return {
+        "matched_by": matched_by,
+        "window_title": window_title or "",
+        "active": active_payload,
+        "sessions": sessions_list,
+    }
+
 
 def build_demo_sessions():
     """Deterministic sample ledger for screenshots, UI testing, and first-run preview.
