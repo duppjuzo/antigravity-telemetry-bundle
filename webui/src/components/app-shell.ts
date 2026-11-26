@@ -103,6 +103,27 @@ export class TelemetryApp extends LitElement {
       border-color: transparent;
     }
 
+    .nav-drawer {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      pointer-events: none;
+      --md-navigation-drawer-modal-container-color: var(
+        --md-sys-color-surface-container-low
+      );
+      --md-navigation-drawer-modal-divider-color: var(
+        --md-sys-color-outline-variant
+      );
+      --md-navigation-drawer-modal-scrim-color: var(--md-sys-color-scrim);
+      --md-navigation-drawer-modal-scrim-opacity: 0.38;
+      --md-navigation-drawer-modal-container-width: min(300px, 84vw);
+      --md-navigation-drawer-modal-container-shape: 0 16px 16px 0;
+    }
+
+    .nav-drawer.open {
+      pointer-events: auto;
+    }
+
     .drawer-header {
       padding: 16px 20px 12px;
       border-bottom: 1px solid var(--md-sys-color-outline-variant);
@@ -225,32 +246,6 @@ export class TelemetryApp extends LitElement {
       NAV_ITEMS.find((n) => n.id === this.activePage) ?? NAV_ITEMS[0];
 
     return html`
-      <md-navigation-drawer-modal
-        .opened=${this.drawerOpen}
-        @navigation-drawer-changed=${this.handleDrawerChanged}
-      >
-        <div class="drawer-header">
-          <div class="drawer-title">Antigravity Telemetry</div>
-          <div class="drawer-subtitle">Usage &amp; Performance</div>
-        </div>
-        <md-list class="drawer-list">
-          ${NAV_ITEMS.map((item) => {
-            const isActive = item.id === this.activePage;
-            return html`
-              <md-list-item
-                type="button"
-                class="nav-item ${isActive ? 'active' : ''}"
-                aria-current=${isActive ? 'page' : 'false'}
-                @click=${() => telemetryStore.navigate(item.id)}
-              >
-                ${renderMdIcon(item.icon, 'start')}
-                <span slot="headline">${item.label}</span>
-              </md-list-item>
-            `;
-          })}
-        </md-list>
-      </md-navigation-drawer-modal>
-
       <div class="app-shell">
         <header class="top-app-bar">
           <div class="top-bar-left">
@@ -301,6 +296,33 @@ export class TelemetryApp extends LitElement {
           ${this.renderPage()}
         </main>
       </div>
+
+      <md-navigation-drawer-modal
+        class="nav-drawer ${this.drawerOpen ? 'open' : ''}"
+        .opened=${this.drawerOpen}
+        @navigation-drawer-changed=${this.handleDrawerChanged}
+      >
+        <div class="drawer-header">
+          <div class="drawer-title">Antigravity Telemetry</div>
+          <div class="drawer-subtitle">Usage &amp; Performance</div>
+        </div>
+        <md-list class="drawer-list">
+          ${NAV_ITEMS.map((item) => {
+            const isActive = item.id === this.activePage;
+            return html`
+              <md-list-item
+                type="button"
+                class="nav-item ${isActive ? 'active' : ''}"
+                aria-current=${isActive ? 'page' : 'false'}
+                @click=${() => telemetryStore.navigate(item.id)}
+              >
+                ${renderMdIcon(item.icon, 'start')}
+                <span slot="headline">${item.label}</span>
+              </md-list-item>
+            `;
+          })}
+        </md-list>
+      </md-navigation-drawer-modal>
     `;
   }
 }
