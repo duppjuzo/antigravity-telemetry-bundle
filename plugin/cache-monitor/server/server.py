@@ -94,6 +94,7 @@ class TelemetryHandler(BaseHTTPRequestHandler):
                     "host": PRIMARY_HOST,
                     "port": PRIMARY_PORT,
                     "gemini_home": collector.get_gemini_home(),
+                    "host_theme": collector.get_host_theme(),
                     "demo_mode": DEMO_MODE,
                     "timestamp": datetime.now().isoformat(),
                 },
@@ -132,6 +133,7 @@ class TelemetryHandler(BaseHTTPRequestHandler):
                 data["generated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 data["range"] = range_name
                 data["version"] = VERSION
+                data["host_theme"] = collector.get_host_theme()
                 self._send_json(200, data)
             except Exception as exc:
                 self._send_json(500, {"error": str(exc)})

@@ -21,6 +21,7 @@ from collections import defaultdict, Counter
 from contextlib import closing
 
 _SYNC_LOCK = threading.Lock()
+_HOST_THEME_CACHE = {"path": "", "mtime": -1.0, "value": None}
 
 
 def get_gemini_home() -> str:
@@ -28,6 +29,54 @@ def get_gemini_home() -> str:
     if env_home:
         return os.path.abspath(os.path.expanduser(env_home))
     return os.path.join(os.path.expanduser("~"), ".gemini")
+
+
+def get_host_theme() -> dict:
+    """Reads Antigravity userSettings.themeMode and contrast from config.json (mtime-cached)."""
+    default_theme = {
+        "theme_mode": "THEME_MODE_INHERIT",
+        "scheme": "system",
+        "contrast": "CONTRAST_LEVEL_DEFAULT",
+        "high_contrast": False,
+    }
+    cfg_path = os.path.join(get_gemini_home(), "config", "config.json")
+    try:
+        mtime = os.path.getmtime(cfg_path)
+    except OSError:
+        return default_theme
+
+    if (
+        _HOST_THEME_CACHE["path"] == cfg_path
+        and _HOST_THEME_CACHE["mtime"] == mtime
+        and _HOST_THEME_CACHE["value"] is not None
+    ):
+        return dict(_HOST_THEME_CACHE["value"])
+
+    try:
+        with open(cfg_path, "r", encoding="utf-8", errors="replace") as f:
+            raw = json.load(f)
+        us = raw.get("userSettings") if isinstance(raw, dict) else None
+        if not isinstance(us, dict):
+            us = {}
+        theme_mode = str(us.get("themeMode") or "THEME_MODE_INHERIT")
+        contrast = str(us.get("contrast") or "CONTRAST_LEVEL_DEFAULT")
+        tm_lower = theme_mode.lower()
+        if "light" in tm_lower:
+            scheme = "light"
+        elif "dark" in tm_lower:
+            scheme = "dark"
+        else:
+            scheme = "system"
+        result = {
+            "theme_mode": theme_mode,
+            "scheme": scheme,
+            "contrast": contrast,
+            "high_contrast": "high" in contrast.lower(),
+        }
+        _HOST_THEME_CACHE.update({"path": cfg_path, "mtime": mtime, "value": result})
+        return dict(result)
+    except Exception:
+        return default_theme
 
 
 def get_cache_file() -> str:
