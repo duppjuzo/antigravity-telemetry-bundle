@@ -108,6 +108,8 @@ class TelemetryHandler(BaseHTTPRequestHandler):
             demo_req = qs.get("demo", ["0"])[0] in ("1", "true", "yes")
             start_param = qs.get("start", [None])[0]
             end_param = qs.get("end", [None])[0]
+            raw_convo = (qs.get("convo_id", [None])[0] or "").strip()
+            convo_id = None if (not raw_convo or raw_convo == "auto") else raw_convo
             since_ts = None
             if range_name == "since18":
                 now_dt = datetime.now()
@@ -129,6 +131,7 @@ class TelemetryHandler(BaseHTTPRequestHandler):
                     start_date=start_date,
                     end_date=end_date,
                     since_ts=since_ts,
+                    convo_id=convo_id,
                 )
                 data["generated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 data["range"] = range_name
