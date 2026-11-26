@@ -2,8 +2,11 @@
 
 一套**零第三方依赖、完全自包含、全平台一键部署**的 Google Antigravity 用量与性能遥测套件，整合了：
 
-1. **Web 实时监控面板服务**（默认 `http://127.0.0.1:8765/`）：实时读取 Antigravity SQLite WAL 对话库与 Transcript，展示总 Token、Prompt Cache 命中率与节省金额、TTFT 首字延迟、Stream/E2E TPS、思考耗时、每日趋势/热力图、24 小时节律、分模型统计与单步瀑布流详情。
-2. **自包含 Antigravity 插件 (`cache-monitor`)**：内置 **Telemetry Dashboard 侧边栏 Sidecar**（在 Antigravity 内直接打开监控面板）以及按需调用的 `cache-stats` Skill。
+1. **Web 实时监控面板服务**（默认 `http://127.0.0.1:8765/`）：实时读取 Antigravity SQLite WAL 对话库与 Transcript，展示当前会话或全局的总 Token、Prompt Cache 命中率与节省金额、TTFT 首字延迟、Stream/E2E TPS、思考耗时、原生上下文窗口占用率（`ctx%` 圆环图与分类目构成）、每日趋势/热力图、24 小时节律、分模型统计与单步瀑布流详情。
+2. **自包含 Antigravity App 插件 (`cache-monitor` v1.2.0)**：专为 Antigravity App `aux_pane` 侧边栏打造（建议右击标签页 **Pin Tab** 固定）：
+   - **顶部常驻摘要条**：自动跟踪最近活跃会话（支持搜索切换与一键切回最新），横向展示 `ctx%` SVG 圆环图、`TTFT`、`Cache Hit`、`Token/s`、`Total Tokens`。
+   - **下方 5 类目选项卡**：`概览` / `上下文` / `单步瀑布` / `模型` / `全局趋势`，自适应侧栏窄屏；内置完整亮色/暗色双套主题，跟随 Antigravity 宿主 CSS Token、`userSettings.themeMode` / `contrast` 及系统偏好实时热切换。
+   - **无自动 Hook 注入**：已移除 `hooks.json`（无 `PostInvocation` 等生命周期钩子），保留按需调用的 `cache-stats` Skill。
 
 > **零外部依赖**：后端纯 Python 3.8+ 标准库（无需 `pip install`），前端纯原生 HTML/CSS/JS（无外网 CDN），Sidecar 纯 Node.js 标准库（Antigravity 内置 Node 直接运行）。
 
@@ -18,22 +21,6 @@
 ---
 
 ## 一键部署指南（按平台选择）
-
-### 0. 从 GitHub 直接一键拉取并部署（最快）
-
-```bash
-# macOS / Linux / WSL2
-git clone https://github.com/duppjuzo/antigravity-telemetry-bundle.git && cd antigravity-telemetry-bundle && ./install.sh
-```
-
-```powershell
-# Windows (PowerShell)
-git clone https://github.com/duppjuzo/antigravity-telemetry-bundle.git; Set-Location antigravity-telemetry-bundle; .\install.ps1
-```
-
-> 或直接从 [Releases 页面](https://github.com/duppjuzo/antigravity-telemetry-bundle/releases/latest) 下载对应平台的 `.zip` / `.tar.gz` 压缩包离线解压部署。
-
----
 
 ### 1. Windows（10 / 11）
 
@@ -81,7 +68,7 @@ chmod +x install.sh uninstall.sh
 ### 3. Linux（Ubuntu / Debian / Fedora / Arch / WSL2 / 远程服务器）
 
 ```bash
-tar -xzf antigravity-telemetry-bundle-v1.1.0.tar.gz
+tar -xzf antigravity-telemetry-bundle-v1.2.0.tar.gz
 cd antigravity-telemetry-bundle
 ./install.sh
 ```
@@ -140,7 +127,7 @@ docker run -d --name antigravity-telemetry \
   # Windows PowerShell
   .\install.ps1 --plugin-only
   ```
-- **或**直接将 `plugin/cache-monitor` 文件夹（或 `dist/cache-monitor-plugin-v1.1.0.zip` 解压后）放入 `~/.gemini/config/plugins/cache-monitor` 即可！
+- **或**直接将 `plugin/cache-monitor` 文件夹放入 `~/.gemini/config/plugins/cache-monitor` 即可！
 
 ---
 
@@ -172,7 +159,7 @@ python3 deploy.py uninstall --keep-plugin          # 仅移除服务与自启，
 | `TELEMETRY_SECONDARY_PORT` | Sidecar=`8765` / 独立=`0` | 额外监听端口，设为 `0` 可关闭 |
 | `GEMINI_HOME` | `~/.gemini` | Antigravity 数据根目录（扫描 `antigravity` / `antigravity-ide` / `antigravity-cli`） |
 | `ANTIGRAVITY_CACHE_FILE` | `<GEMINI_HOME>/antigravity/antigravity_stats_cache.json` | 增量解析缓存文件路径（若只读会自动回退至系统临时目录） |
-| `ANTIGRAVITY_TELEMETRY_PYTHON` | 自动探测 | 指定 Sidecar/Hook 使用的 Python 3.8+ 可执行文件路径 |
+| `ANTIGRAVITY_TELEMETRY_PYTHON` | 自动探测 | 指定 Sidecar / CLI 脚本使用的 Python 3.8+ 可执行文件路径 |
 | `TELEMETRY_DEMO` | `0` | 设为 `1` 时启用内置演示数据 |
 
 ---
@@ -192,15 +179,14 @@ antigravity-telemetry-bundle/
 └── plugin/
     └── cache-monitor/           # 完全自包含的 Antigravity 插件
         ├── plugin.json          # 插件清单
-        ├── hooks.json           # 跨平台 Hook 配置（默认关闭）
-        ├── run_hook.mjs         # 跨平台 Hook/CLI 启动器
+        ├── run_hook.mjs         # 跨平台 CLI 摘要启动器
         ├── cache_hook.py        # 会话缓存与遥测摘要脚本
         ├── assets/logo.svg      # 插件图标
         ├── skills/cache-stats/  # 按需查询 Skill
         ├── sidecars/telemetry/  # 跨平台 Sidecar 启动器与清单
         └── server/              # 内嵌 Telemetry 服务核心
-            ├── collector.py     # SQLite Protobuf/WAL 遥测采集引擎
+            ├── collector.py     # SQLite Protobuf/WAL 遥测与上下文采集引擎
             ├── server.py        # 多线程 HTTP 服务与 REST API
             ├── ensure_server.py # 跨平台无窗口后台守护启动器
-            └── web_dashboard.html # 零外网依赖暗色主题交互面板
+            └── web_dashboard.html # 零外网依赖自适应主题 aux_pane 面板
 ```
