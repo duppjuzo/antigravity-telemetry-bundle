@@ -54,7 +54,7 @@ GEMINI_HOME = get_gemini_home()
 CACHE_FILE = get_cache_file()
 DATA_SOURCES = get_data_sources()
 
-CACHE_SCHEMA_VERSION = 5
+CACHE_SCHEMA_VERSION = 6
 
 def _extract_effort_suffix(r):
     if re.search(r'(?:^|[-_\s])xhigh(?:$|[-_\s])', r):
@@ -155,6 +155,18 @@ MODEL_MAP = {
     1668: "Orchestrator (Argon)",
     1669: "Gemini Flash",
 }
+
+
+def fallback_context_limit(model_name):
+    """Fallback context window limit when gen_metadata lacks a native limit."""
+    m = (model_name or "").lower()
+    if "opus 5.5" in m or "opus-5-5" in m or "opus-5.5" in m:
+        return 840_000
+    if "claude" in m:
+        return 200_000
+    if "gemini 4" in m or "orchestrator" in m:
+        return 512_000
+    return 1_048_576
 
 # Pricing per 1M tokens (Standard Gemini Flash reference model)
 RATE_INPUT = 0.10
@@ -312,12 +324,65 @@ def open_readonly_db(db_path):
         imm_uri = f"{db_uri}?mode=ro&immutable=1"
         return sqlite3.connect(imm_uri, uri=True, timeout=2.0)
 
-def _extract_gen_metadata_models(cur):
-    """Extracts exact step->model, ordered model list, and model_id->model mappings from gen_metadata protobuf fields (19/20/21)."""
+def _parse_context_snapshot(sub1):
+    """Extracts native context window usage, limit, and category breakdown from gen_metadata sub1[9][10]."""
+    if 9 not in sub1 or not sub1[9]:
+        return None
+    k9 = parse_proto(sub1[9][0][1])
+    if 10 not in k9 or not k9[10]:
+        return None
+    k9_10 = parse_proto(k9[10][0][1])
+    est_tokens = k9_10.get(1, [('varint', 0)])[0][1]
+    compacted_flag = k9_10.get(2, [('varint', 0)])[0][1]
+    limit_tokens = k9_10.get(4, [('varint', 0)])[0][1]
+
+    categories = []
+    if 3 in k9_10 and k9_10[3]:
+        c3 = parse_proto(k9_10[3][0][1])
+        for _, cb in c3.get(1, []):
+            cf = parse_proto(cb)
+            cname = cf.get(1, [('bytes', b'')])[0][1].decode('utf-8', errors='ignore').strip()
+            if not cname:
+                continue
+            cid = cf.get(2, [('varint', 0)])[0][1]
+            is_system = bool(cf.get(3, [('varint', 0)])[0][1])
+            ctok = cf.get(4, [('varint', 0)])[0][1]
+            items = []
+            for _, ib in cf.get(5, []):
+                ip = parse_proto(ib)
+                iname = ip.get(1, [('bytes', b'')])[0][1].decode('utf-8', errors='ignore').strip()
+                itok = ip.get(3, [('varint', 0)])[0][1]
+                if iname or itok > 0:
+                    items.append({"name": iname or "item", "tokens": itok})
+            items.sort(key=lambda x: x["tokens"], reverse=True)
+            categories.append({
+                "name": cname,
+                "category_id": cid,
+                "is_system": is_system,
+                "tokens": ctok,
+                "item_count": len(items),
+                "items": items[:40],
+            })
+    categories.sort(key=lambda x: x["tokens"], reverse=True)
+    if est_tokens <= 0 and limit_tokens <= 0 and not categories:
+        return None
+    return {
+        "est_tokens": est_tokens,
+        "compacted_flag": compacted_flag,
+        "limit_tokens": limit_tokens,
+        "categories": categories,
+    }
+
+
+def _extract_gen_metadata(cur):
+    """Extracts step->model, ordered model list, model_id->model, fallback usage rows, and context snapshots from gen_metadata."""
     gm_step_models = {}
     gm_id_models = {}
     gm_ordered_models = []
     fallback_rows = []
+    latest_ctx = None
+    ctx_by_step = {}
+    ctx_ordered = []
     try:
         rows = cur.execute('SELECT idx, data FROM gen_metadata ORDER BY idx ASC').fetchall()
         for gm_idx, data in rows:
@@ -360,6 +425,20 @@ def _extract_gen_metadata_models(cur):
                             if k == 'last_step_index' and v.isdigit():
                                 last_step_idx = int(v)
 
+                    ctx_snap = _parse_context_snapshot(sub1)
+                    if ctx_snap is not None:
+                        latest_ctx = ctx_snap
+                        step_ctx = {
+                            "used": ctx_snap["est_tokens"],
+                            "limit": ctx_snap["limit_tokens"],
+                        }
+                        ctx_ordered.append(step_ctx)
+                        if last_step_idx is not None:
+                            ctx_by_step[last_step_idx + 1] = step_ctx
+                            ctx_by_step.setdefault(last_step_idx, step_ctx)
+                    elif usage_vals is not None:
+                        ctx_ordered.append(None)
+
                     if display_name:
                         if model_id:
                             gm_id_models[model_id] = display_name
@@ -374,7 +453,63 @@ def _extract_gen_metadata_models(cur):
                 pass
     except Exception:
         pass
-    return gm_step_models, gm_id_models, gm_ordered_models, fallback_rows
+    return gm_step_models, gm_id_models, gm_ordered_models, fallback_rows, latest_ctx, ctx_by_step, ctx_ordered
+
+
+def _build_session_context(latest_ctx, latest_api_prompt, latest_model):
+    """Builds normalized context window usage & category breakdown payload for a session."""
+    if latest_ctx is not None:
+        used_tokens = latest_ctx["est_tokens"] or latest_api_prompt
+        limit_tokens = latest_ctx["limit_tokens"] or fallback_context_limit(latest_model)
+        source = "db_native"
+        compacted = bool(latest_ctx["compacted_flag"])
+        raw_cats = latest_ctx["categories"]
+    else:
+        used_tokens = latest_api_prompt
+        limit_tokens = fallback_context_limit(latest_model)
+        source = "fallback_estimate"
+        compacted = False
+        raw_cats = []
+
+    free_tokens = max(0, limit_tokens - used_tokens) if limit_tokens > 0 else 0
+    used_pct = round(min(100.0, (used_tokens / limit_tokens) * 100.0), 1) if limit_tokens > 0 else None
+    free_pct = round(max(0.0, 100.0 - used_pct), 1) if used_pct is not None else None
+
+    categories = []
+    system_tokens = 0
+    chat_tokens = 0
+    for cat in raw_cats:
+        ctok = int(cat.get("tokens") or 0)
+        if cat.get("is_system"):
+            system_tokens += ctok
+        else:
+            chat_tokens += ctok
+        categories.append({
+            "name": cat["name"],
+            "category_id": cat.get("category_id", 0),
+            "is_system": bool(cat.get("is_system")),
+            "tokens": ctok,
+            "pct_of_limit": round((ctok / limit_tokens) * 100.0, 1) if limit_tokens > 0 else 0.0,
+            "pct_of_used": round((ctok / used_tokens) * 100.0, 1) if used_tokens > 0 else 0.0,
+            "item_count": cat.get("item_count", len(cat.get("items") or [])),
+            "items": cat.get("items") or [],
+        })
+    if not categories and used_tokens > 0:
+        chat_tokens = used_tokens
+
+    return {
+        "used_tokens": used_tokens,
+        "limit_tokens": limit_tokens,
+        "free_tokens": free_tokens,
+        "used_pct": used_pct,
+        "free_pct": free_pct,
+        "api_prompt_tokens": latest_api_prompt,
+        "system_tokens": system_tokens,
+        "chat_tokens": chat_tokens,
+        "compacted": compacted,
+        "source": source,
+        "categories": categories,
+    }
 
 def parse_session_db(db_path, surface="IDE", brain_dir=None):
     """Parses a single conversation SQLite database safely"""
@@ -387,8 +522,8 @@ def parse_session_db(db_path, surface="IDE", brain_dir=None):
         with closing(open_readonly_db(db_path)) as con:
             cur = con.cursor()
 
-            # 1. Extract model mappings from gen_metadata (exact protobuf fields, no prompt regex pollution)
-            gm_step_models, gm_id_models, gm_ordered_models, gm_fallback_rows = _extract_gen_metadata_models(cur)
+            # 1. Extract model mappings & context telemetry from gen_metadata
+            gm_step_models, gm_id_models, gm_ordered_models, gm_fallback_rows, latest_ctx, ctx_by_step, ctx_ordered = _extract_gen_metadata(cur)
 
             # 1.5 Fallback executor_metadata model slugs
             exec_step_models = {}
@@ -466,6 +601,22 @@ def parse_session_db(db_path, surface="IDE", brain_dir=None):
                         if not resolved_model:
                             unresolved_model_steps.add(len(steps_data))
                         step_model = resolved_model or "Gemini 3.8 Flash"
+
+                        step_ctx = ctx_by_step.get(idx) or (
+                            ctx_ordered[p15_ordinal]
+                            if p15_ordinal < len(ctx_ordered) and ctx_ordered[p15_ordinal]
+                            else None
+                        )
+                        ctx_used = step_ctx.get("used") if step_ctx else None
+                        ctx_limit = (step_ctx.get("limit") if step_ctx else None) or (
+                            latest_ctx["limit_tokens"] if latest_ctx else None
+                        )
+                        ctx_pct = (
+                            round(min(100.0, (ctx_used / ctx_limit) * 100.0), 1)
+                            if (ctx_used is not None and ctx_limit and ctx_limit > 0)
+                            else None
+                        )
+
                         p15_ordinal += 1
                         session_models_used.append(step_model)
 
@@ -492,6 +643,9 @@ def parse_session_db(db_path, surface="IDE", brain_dir=None):
                             "e2e_dur": e_dur,
                             "stream_tps": stream_tps,
                             "e2e_tps": e2e_tps,
+                            "ctx_used": ctx_used,
+                            "ctx_limit": ctx_limit,
+                            "ctx_pct": ctx_pct,
                         })
                     except Exception:
                         pass
@@ -532,6 +686,9 @@ def parse_session_db(db_path, surface="IDE", brain_dir=None):
                         "think_sec": None,
                         "stream_tps": None,
                         "e2e_tps": None,
+                        "ctx_used": None,
+                        "ctx_limit": None,
+                        "ctx_pct": None,
                     })
 
             model_name = Counter(session_models_used).most_common(1)[0][0] if session_models_used else "Gemini 3.8 Flash"
@@ -620,6 +777,10 @@ def parse_session_db(db_path, surface="IDE", brain_dir=None):
                 st["model"] = tm
         model_name = Counter(st["model"] for st in steps_data).most_common(1)[0][0]
 
+    latest_api_prompt = (steps_data[-1]["input_tokens"] + steps_data[-1]["cached_tokens"]) if steps_data else 0
+    latest_step_model = steps_data[-1]["model"] if steps_data else model_name
+    context_info = _build_session_context(latest_ctx, latest_api_prompt, latest_step_model)
+
     total_input = sum(s["input_tokens"] for s in steps_data)
     total_cached = sum(s["cached_tokens"] for s in steps_data)
     total_output = sum(s["output_tokens"] for s in steps_data)
@@ -655,6 +816,8 @@ def parse_session_db(db_path, surface="IDE", brain_dir=None):
         "schema_version": CACHE_SCHEMA_VERSION,
         "convo_id": convo_id,
         "mtime": db_mtime,
+        "last_active_ts": last_active_ts,
+        "last_active_at": datetime.fromtimestamp(last_active_ts).strftime('%Y-%m-%d %H:%M:%S'),
         "surface": surface,
         "created_at": datetime.fromtimestamp(start_ts).strftime('%Y-%m-%d %H:%M:%S'),
         "date": datetime.fromtimestamp(last_active_ts).strftime('%Y-%m-%d'),
@@ -683,6 +846,7 @@ def parse_session_db(db_path, surface="IDE", brain_dir=None):
         "valid_stream_dur": round(valid_stream_dur, 4),
         "valid_e2e_out": valid_e2e_out,
         "valid_e2e_dur": round(valid_e2e_dur, 4),
+        "context": context_info,
         "steps_detail": steps_data,
         "tool_counts": dict(tool_counts),
         "tool_errors": tool_errors
@@ -740,6 +904,7 @@ def _sync_all_sessions_unlocked(force=False):
                     and cached_entry.get("surface")
                     and cached_entry.get("schema_version") == CACHE_SCHEMA_VERSION
                     and "avg_ttft_sec" in cached_entry
+                    and "context" in cached_entry
                 ):
                     old_m = cached_entry.get("model", "")
                     if any(dep in old_m for dep in ["1.5", "2.5", "ID:", "Thinking Exp", "Flash 8B"]):
