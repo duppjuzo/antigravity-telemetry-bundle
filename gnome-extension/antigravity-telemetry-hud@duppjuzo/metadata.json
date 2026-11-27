@@ -1,0 +1,16 @@
+{
+  "uuid": "antigravity-telemetry-hud@duppjuzo",
+  "name": "Antigravity Telemetry HUD",
+  "description": "Floating pill monitor on the panel/bottom bar showing live Antigravity conversation TPS, TTFT, cache hit rate, and steps/turns while Antigravity is open.",
+  "shell-version": [
+    "46",
+    "47",
+    "48",
+    "49",
+    "50",
+    "51"
+  ],
+  "version": 1,
+  "version-name": "1.0.0",
+  "url": "https://github.com/duppjuzo/antigravity-telemetry-bundle"
+}

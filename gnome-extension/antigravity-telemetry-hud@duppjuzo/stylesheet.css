@@ -1,0 +1,79 @@
+/* Antigravity Telemetry HUD — Floating Capsule for GNOME Panel / Dash-to-Panel */
+
+.agy-hud-button {
+    padding: 0 4px;
+    margin: 0 2px;
+}
+
+.agy-hud-pill {
+    background-color: rgba(25, 28, 30, 0.88);
+    border: 1px solid rgba(140, 207, 240, 0.32);
+    border-radius: 999px;
+    padding: 2px 11px;
+    margin: 2px 0;
+    spacing: 8px;
+    transition-duration: 150ms;
+}
+
+.agy-hud-pill:hover {
+    background-color: rgba(39, 42, 45, 0.96);
+    border-color: rgba(140, 207, 240, 0.65);
+}
+
+.agy-hud-pill-running {
+    border-color: rgba(129, 201, 149, 0.65);
+}
+
+.agy-hud-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 999px;
+    background-color: #8ccff0;
+}
+
+.agy-hud-dot-running {
+    background-color: #81c995;
+}
+
+.agy-hud-dot-offline {
+    background-color: #8b9198;
+}
+
+.agy-hud-text {
+    font-size: 12px;
+    font-weight: 600;
+    font-feature-settings: "tnum";
+    color: #e1e2e5;
+}
+
+.agy-hud-muted {
+    color: #9aa0a6;
+    font-weight: 500;
+}
+
+.agy-hud-accent {
+    color: #8ccff0;
+}
+
+.agy-hud-good {
+    color: #81c995;
+}
+
+.agy-hud-warn {
+    color: #fdd663;
+}
+
+.agy-hud-menu-header {
+    font-weight: 700;
+    font-size: 13px;
+}
+
+.agy-hud-menu-sub {
+    font-size: 11px;
+    color: #9aa0a6;
+}
+
+.agy-hud-menu-kv {
+    font-size: 12px;
+    font-feature-settings: "tnum";
+}
