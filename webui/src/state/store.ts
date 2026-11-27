@@ -17,6 +17,7 @@ import {
   DEFAULT_USER_SETTINGS,
   type GlobalRange,
   type GlobalTrendsCardMode,
+  type GnomeExtensionStatus,
   type HomeCardId,
   type HomeScope,
   type HourlyEntry,
@@ -186,6 +187,9 @@ export class TelemetryStore extends EventTarget {
   hudStatus: HudStatus | null = null;
   hudBusy = false;
   hudError: string | null = null;
+  gnomeExtStatus: GnomeExtensionStatus | null = null;
+  gnomeExtBusy = false;
+  gnomeExtError: string | null = null;
   readonly hostConvoId: string;
   readonly themeEngine: MonetThemeEngine;
 
@@ -434,6 +438,44 @@ export class TelemetryStore extends EventTarget {
       this.hudError = err instanceof Error ? err.message : String(err);
     } finally {
       this.hudBusy = false;
+      this.emitChange();
+    }
+  }
+
+  async refreshGnomeExtStatus(): Promise<void> {
+    try {
+      const res = await apiFetch('./api/gnome-extension/status', { cache: 'no-store' });
+      if (!res.ok) return;
+      const status = (await res.json()) as GnomeExtensionStatus;
+      this.gnomeExtStatus = status;
+      this.emitChange();
+    } catch {
+      // Ignore transient polling errors
+    }
+  }
+
+  async controlGnomeExtension(
+    action: 'install' | 'uninstall' | 'enable' | 'disable'
+  ): Promise<void> {
+    if (this.gnomeExtBusy) return;
+    this.gnomeExtBusy = true;
+    this.gnomeExtError = null;
+    this.emitChange();
+    try {
+      const res = await apiFetch('./api/gnome-extension/control', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+      });
+      const payload = (await res.json()) as GnomeExtensionStatus;
+      this.gnomeExtStatus = payload;
+      if (!res.ok) {
+        this.gnomeExtError = payload.error || `HTTP ${res.status}`;
+      }
+    } catch (err) {
+      this.gnomeExtError = err instanceof Error ? err.message : String(err);
+    } finally {
+      this.gnomeExtBusy = false;
       this.emitChange();
     }
   }

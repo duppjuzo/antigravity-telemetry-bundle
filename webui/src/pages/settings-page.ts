@@ -16,6 +16,7 @@ import {
 } from '../theme/seed-provider';
 import type { MdSwitch } from '@material/web/switch/switch.js';
 import type {
+  GnomeExtensionStatus,
   HomeScope,
   HudStatus,
   SeedSourceMode,
@@ -536,6 +537,10 @@ export class SettingsPage extends LitElement {
   @state() private hudStatus: HudStatus | null = telemetryStore.hudStatus;
   @state() private hudBusy = telemetryStore.hudBusy;
   @state() private hudError: string | null = telemetryStore.hudError;
+  @state() private gnomeExtStatus: GnomeExtensionStatus | null =
+    telemetryStore.gnomeExtStatus;
+  @state() private gnomeExtBusy = telemetryStore.gnomeExtBusy;
+  @state() private gnomeExtError: string | null = telemetryStore.gnomeExtError;
   @state() private sessionSearch = '';
 
   private unsubscribe?: () => void;
@@ -545,6 +550,7 @@ export class SettingsPage extends LitElement {
     this.syncFromStore();
     this.unsubscribe = telemetryStore.subscribe(() => this.syncFromStore());
     void telemetryStore.refreshHudStatus();
+    void telemetryStore.refreshGnomeExtStatus();
     void telemetryStore.refreshSystemTheme(false);
   }
 
@@ -570,6 +576,9 @@ export class SettingsPage extends LitElement {
     this.hudStatus = telemetryStore.hudStatus;
     this.hudBusy = telemetryStore.hudBusy;
     this.hudError = telemetryStore.hudError;
+    this.gnomeExtStatus = telemetryStore.gnomeExtStatus;
+    this.gnomeExtBusy = telemetryStore.gnomeExtBusy;
+    this.gnomeExtError = telemetryStore.gnomeExtError;
   }
 
   private handleHudToggle(e: Event): void {
@@ -584,6 +593,19 @@ export class SettingsPage extends LitElement {
 
   private handleHudResetPosition(): void {
     void telemetryStore.resetHudPosition();
+  }
+
+  private handleGnomeExtInstall(): void {
+    void telemetryStore.controlGnomeExtension('install');
+  }
+
+  private handleGnomeExtUninstall(): void {
+    void telemetryStore.controlGnomeExtension('uninstall');
+  }
+
+  private handleGnomeExtToggle(e: Event): void {
+    const selected = Boolean((e.target as MdSwitch).selected);
+    void telemetryStore.controlGnomeExtension(selected ? 'enable' : 'disable');
   }
 
   private handleThemeModeChange(e: Event): void {
@@ -1252,13 +1274,16 @@ export class SettingsPage extends LitElement {
     const hud = this.hudStatus;
     const hudSupported = hud ? Boolean(hud.supported) : true;
     const hudRunning = Boolean(hud?.running);
+    const isLinux = hud?.platform === 'linux';
+    const canAlwaysOnTop = hud?.capabilities?.always_on_top !== false;
+    const canResetPos = hud?.capabilities?.reset_position !== false;
     const badgeClass = !hudSupported
       ? 'unsupported'
       : hudRunning
         ? 'running'
         : '';
     const badgeLabel = !hudSupported
-      ? '仅限 Windows'
+      ? '不可用'
       : hudRunning
         ? '运行中'
         : '已关闭';
@@ -1281,8 +1306,10 @@ export class SettingsPage extends LitElement {
                 <span slot="headline">启用桌面悬浮窗</span>
                 <span slot="supporting-text">
                   ${hudSupported
-                    ? '在 Antigravity 窗口上方显示跟随式 M3 遥测胶囊，配色自动同步 Monet 主题'
-                    : '仅支持 Windows 桌面环境'}
+                    ? isLinux
+                      ? '在桌面显示跟随 Antigravity 的 GTK4 遥测胶囊（TPS / TTFT / 命中率 / 步数），配色自动同步 Monet 主题'
+                      : '在 Antigravity 窗口上方显示跟随式 M3 遥测胶囊，配色自动同步 Monet 主题'
+                    : hud?.reason || '当前桌面环境不支持悬浮窗'}
                 </span>
               </md-list-item>
             </div>
@@ -1296,7 +1323,7 @@ export class SettingsPage extends LitElement {
             </div>
           </div>
 
-          ${hudSupported
+          ${hudSupported && canAlwaysOnTop
             ? html`
                 <md-divider></md-divider>
 
@@ -1319,7 +1346,11 @@ export class SettingsPage extends LitElement {
                     ></md-switch>
                   </div>
                 </div>
+              `
+            : nothing}
 
+          ${hudSupported && canResetPos
+            ? html`
                 <md-divider></md-divider>
 
                 <div class="setting-row">
@@ -1343,10 +1374,129 @@ export class SettingsPage extends LitElement {
                 </div>
               `
             : nothing}
+
+          ${hudSupported && isLinux
+            ? html`
+                <md-divider></md-divider>
+
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <md-list-item>
+                      ${renderMdIcon('desktop_windows', 'start')}
+                      <span slot="headline">Linux 窗口提示</span>
+                      <span slot="supporting-text">
+                        可按住胶囊拖拽至底栏上方；Wayland 下如需置顶请在窗口标题栏右键菜单启用“总在最前”
+                      </span>
+                    </md-list-item>
+                  </div>
+                </div>
+              `
+            : nothing}
         </md-list>
 
         ${this.hudError
           ? html`<div class="hud-error" role="alert">${this.hudError}</div>`
+          : nothing}
+      </md-outlined-card>
+
+      ${this.renderGnomeExtensionSection()}
+    `;
+  }
+
+  private renderGnomeExtensionSection() {
+    const ext = this.gnomeExtStatus;
+    if (!ext || (!ext.supported && !ext.is_gnome)) {
+      return nothing;
+    }
+
+    const installed = Boolean(ext.installed);
+    const enabled = Boolean(ext.enabled);
+    const loaded = Boolean(ext.loaded_in_shell);
+    const badgeClass = !ext.supported
+      ? 'unsupported'
+      : installed && enabled && loaded
+        ? 'running'
+        : '';
+    const badgeLabel = !ext.supported
+      ? '不可用'
+      : !installed
+        ? '未安装'
+        : enabled && loaded
+          ? '运行中'
+          : enabled && ext.needs_relogin
+            ? '需重新登录'
+            : enabled
+              ? '已启用'
+              : '已停用';
+
+    return html`
+      <md-outlined-card class="settings-card">
+        <div class="section-head">
+          <div class="section-title-row">
+            ${renderMdIcon('desktop_windows')}
+            <h2 class="section-title">GNOME 底栏扩展</h2>
+          </div>
+          <span class="mode-badge ${badgeClass}">${badgeLabel}</span>
+        </div>
+
+        <md-list class="settings-list">
+          <div class="setting-row">
+            <div class="setting-info">
+              <md-list-item>
+                ${renderMdIcon('insights', 'start')}
+                <span slot="headline">底栏实时监控胶囊 (${ext.uuid})</span>
+                <span slot="supporting-text">
+                  ${ext.supported
+                    ? installed
+                      ? `已安装到 ${ext.install_path || '~/.local/share/gnome-shell/extensions'}；打开 Antigravity 时自动在底栏显示 TPS / TTFT / 命中率 / 步数`
+                      : '安装后可在 Dash-to-Panel / GNOME 底栏直接嵌入监控胶囊，随 Antigravity 启停自动显隐'
+                    : ext.reason || '仅支持 GNOME Shell 桌面环境'}
+                </span>
+              </md-list-item>
+            </div>
+            <div class="setting-action" style="gap: 8px;">
+              ${ext.supported
+                ? installed
+                  ? html`
+                      <md-switch
+                        aria-label="启用 GNOME 底栏扩展"
+                        .selected=${enabled}
+                        ?disabled=${this.gnomeExtBusy}
+                        @change=${this.handleGnomeExtToggle}
+                      ></md-switch>
+                      <md-outlined-button
+                        ?disabled=${this.gnomeExtBusy}
+                        @click=${this.handleGnomeExtUninstall}
+                      >
+                        卸载扩展
+                      </md-outlined-button>
+                    `
+                  : html`
+                      <md-filled-tonal-button
+                        ?disabled=${this.gnomeExtBusy}
+                        @click=${this.handleGnomeExtInstall}
+                      >
+                        安装并启用
+                      </md-filled-tonal-button>
+                    `
+                : nothing}
+            </div>
+          </div>
+        </md-list>
+
+        ${installed && ext.needs_relogin
+          ? html`
+              <div class="seed-warning" role="status">
+                ${renderMdIcon('error_outline')}
+                <span>
+                  扩展已安装并预设启用；GNOME Wayland 会话需要注销并重新登录一次，底栏扩展才会正式加载。
+                </span>
+              </div>
+            `
+          : nothing}
+
+        ${this.gnomeExtError
+          ? html`<div class="hud-error" role="alert">${this.gnomeExtError}</div>`
           : nothing}
       </md-outlined-card>
     `;

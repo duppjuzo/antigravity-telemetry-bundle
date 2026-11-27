@@ -440,11 +440,33 @@ export interface UserSettings {
 export interface HudStatus {
   supported: boolean;
   reason?: string;
+  platform?: string;
+  capabilities?: {
+    always_on_top?: boolean;
+    reset_position?: boolean;
+  };
   running: boolean;
   pid?: number | null;
   always_on_top: boolean;
   theme?: 'dark' | 'light';
   has_monet_palette?: boolean;
+  error?: string;
+}
+
+export interface GnomeExtensionStatus {
+  supported: boolean;
+  reason?: string;
+  is_gnome?: boolean;
+  is_wayland?: boolean;
+  gnome_shell_version?: string;
+  uuid: string;
+  installed: boolean;
+  enabled: boolean;
+  loaded_in_shell?: boolean;
+  shell_state?: string;
+  needs_relogin?: boolean;
+  install_path?: string;
+  source_available?: boolean;
   error?: string;
 }
 

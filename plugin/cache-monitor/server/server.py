@@ -7,11 +7,13 @@ Zero external dependencies — runs on Python 3.8+ standard library.
 from __future__ import annotations
 
 import argparse
+import ast
 import ctypes
 import json
 import mimetypes
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -33,7 +35,10 @@ import system_theme  # noqa: E402
 VERSION = "1.2.0"
 DASHBOARD_HTML = os.path.join(BASE_DIR, "web_dashboard.html")
 HUD_SCRIPT = os.path.join(BASE_DIR, "hud_overlay.py")
+HUD_LINUX_SCRIPT = os.path.join(BASE_DIR, "hud_linux.py")
 HUD_MUTEX_NAME = "Local\\AntigravityTelemetryHUDMutex"
+GNOME_EXT_UUID = "antigravity-telemetry-hud@duppjuzo"
+_LINUX_HUD_PYTHON_CACHE: str | None = None
 ASSETS_DIR = os.path.realpath(os.path.join(BASE_DIR, "assets"))
 ASSET_MIME_TYPES = {
     ".js": "application/javascript; charset=utf-8",
@@ -172,12 +177,62 @@ def _remove_hud_pid_info() -> None:
             pass
 
 
+def _resolve_linux_hud_python() -> str | None:
+    global _LINUX_HUD_PYTHON_CACHE
+    if _LINUX_HUD_PYTHON_CACHE and os.path.exists(_LINUX_HUD_PYTHON_CACHE):
+        return _LINUX_HUD_PYTHON_CACHE
+    candidates = []
+    for candidate in (
+        sys.executable,
+        shutil.which("python3"),
+        "/usr/bin/python3",
+        "/usr/local/bin/python3",
+    ):
+        if candidate and candidate not in candidates:
+            candidates.append(candidate)
+    for py in candidates:
+        try:
+            proc = subprocess.run(
+                [py, "-c", "import gi; gi.require_version('Gtk', '4.0'); from gi.repository import Gtk"],
+                capture_output=True,
+                timeout=3,
+            )
+            if proc.returncode == 0:
+                _LINUX_HUD_PYTHON_CACHE = py
+                return py
+        except Exception:
+            continue
+    return None
+
+
+def _active_hud_script() -> str:
+    return HUD_SCRIPT if os.name == "nt" else HUD_LINUX_SCRIPT
+
+
+def _hud_platform_name() -> str:
+    if os.name == "nt":
+        return "windows"
+    if sys.platform.startswith("linux"):
+        return "linux"
+    if sys.platform == "darwin":
+        return "macos"
+    return sys.platform
+
+
 def is_hud_supported() -> tuple[bool, str]:
-    if os.name != "nt":
-        return False, "Windows only"
-    if not os.path.isfile(HUD_SCRIPT):
-        return False, "hud_overlay.py missing"
-    return True, ""
+    if os.name == "nt":
+        if not os.path.isfile(HUD_SCRIPT):
+            return False, "hud_overlay.py missing"
+        return True, ""
+    if sys.platform.startswith("linux"):
+        if not os.path.isfile(HUD_LINUX_SCRIPT):
+            return False, "hud_linux.py missing"
+        if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+            return False, "No graphical display (DISPLAY/WAYLAND_DISPLAY unset)"
+        if _resolve_linux_hud_python() is None:
+            return False, "PyGObject (Gtk 4.0) not installed"
+        return True, ""
+    return False, "Windows or Linux desktop only"
 
 
 def _is_hud_mutex_alive() -> bool:
@@ -224,6 +279,15 @@ def _is_pid_alive(pid: int | None) -> bool:
                 kernel32.CloseHandle(handle)
         except Exception:
             return False
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
     return False
 
 
@@ -233,6 +297,10 @@ def _resolve_background_python() -> str:
         pyw = os.path.join(exe_dir, "pythonw.exe")
         if os.path.exists(pyw):
             return pyw
+    elif sys.platform.startswith("linux"):
+        py_gtk = _resolve_linux_hud_python()
+        if py_gtk:
+            return py_gtk
     return sys.executable
 
 
@@ -258,9 +326,15 @@ def get_hud_status() -> dict:
     has_monet_palette = isinstance(palettes, dict) and (
         isinstance(palettes.get("dark"), dict) or isinstance(palettes.get("light"), dict)
     )
+    is_win = os.name == "nt"
     return {
         "supported": supported,
         "reason": reason,
+        "platform": _hud_platform_name(),
+        "capabilities": {
+            "always_on_top": is_win,
+            "reset_position": is_win,
+        },
         "running": running,
         "pid": pid if running else None,
         "always_on_top": bool(cfg.get("always_on_top", False)),
@@ -288,9 +362,10 @@ def start_hud_process() -> tuple[bool, dict]:
             _save_hud_config(cfg)
 
     py_exe = _resolve_background_python()
+    hud_script = _active_hud_script()
     hud_host = _health_host(PRIMARY_HOST)
     hud_port = SECONDARY_PORT if SECONDARY_PORT > 0 else PRIMARY_PORT
-    cmd = [py_exe, HUD_SCRIPT, "--host", hud_host, "--port", str(hud_port)]
+    cmd = [py_exe, hud_script, "--host", hud_host, "--port", str(hud_port)]
     if IS_SIDECAR:
         cmd.extend(["--parent-pid", str(os.getpid())])
     if DEMO_MODE:
@@ -314,14 +389,22 @@ def start_hud_process() -> tuple[bool, dict]:
         if not IS_SIDECAR:
             flags |= getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
         popen_kwargs["creationflags"] = flags
+    elif not IS_SIDECAR:
+        popen_kwargs["start_new_session"] = True
 
     proc = subprocess.Popen(cmd, **popen_kwargs)
     deadline = time.monotonic() + 2.5
     while time.monotonic() < deadline:
-        if _is_hud_mutex_alive():
+        if os.name == "nt" and _is_hud_mutex_alive():
             status = get_hud_status()
             status["status"] = "started"
             return True, status
+        if os.name != "nt":
+            pid_info = _read_hud_pid_info()
+            if isinstance(pid_info, dict) and pid_info.get("pid") == proc.pid and _is_pid_alive(proc.pid):
+                status = get_hud_status()
+                status["status"] = "started"
+                return True, status
         if proc.poll() is not None:
             break
         time.sleep(0.08)
@@ -360,8 +443,13 @@ def stop_hud_process() -> tuple[bool, dict]:
             ctypes.windll.user32.PostMessageW(wintypes.HWND(hwnd), WM_CLOSE, 0, 0)
         except Exception:
             pass
+    elif os.name != "nt" and pid and _is_pid_alive(pid):
+        try:
+            os.kill(int(pid), signal.SIGTERM)
+        except OSError:
+            pass
 
-    deadline = time.monotonic() + 1.0
+    deadline = time.monotonic() + 1.2
     while time.monotonic() < deadline:
         if not _is_hud_mutex_alive() and not _is_pid_alive(pid):
             break
@@ -391,6 +479,12 @@ def stop_hud_process() -> tuple[bool, dict]:
             except Exception:
                 pass
         time.sleep(0.15)
+    elif os.name != "nt" and pid and _is_pid_alive(pid):
+        try:
+            os.kill(int(pid), signal.SIGKILL)
+        except OSError:
+            pass
+        time.sleep(0.1)
 
     if not _is_hud_mutex_alive() and not _is_pid_alive(pid):
         _remove_hud_pid_info()
@@ -398,6 +492,202 @@ def stop_hud_process() -> tuple[bool, dict]:
     status = get_hud_status()
     status["status"] = "stopped" if not status["running"] else "stop_pending"
     return not status["running"], status
+
+
+def _gnome_ext_source_dir() -> str | None:
+    candidates = [
+        os.path.realpath(os.path.join(BASE_DIR, "..", "gnome-extension", GNOME_EXT_UUID)),
+        os.path.realpath(os.path.join(BASE_DIR, "..", "..", "..", "gnome-extension", GNOME_EXT_UUID)),
+    ]
+    for path in candidates:
+        if os.path.isfile(os.path.join(path, "metadata.json")) and os.path.isfile(os.path.join(path, "extension.js")):
+            return path
+    return None
+
+
+def _gnome_ext_install_dir() -> str:
+    return os.path.join(os.path.expanduser("~"), ".local", "share", "gnome-shell", "extensions", GNOME_EXT_UUID)
+
+
+def _read_gsettings_enabled_extensions() -> list[str] | None:
+    if not shutil.which("gsettings"):
+        return None
+    try:
+        proc = subprocess.run(
+            ["gsettings", "get", "org.gnome.shell", "enabled-extensions"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        if proc.returncode != 0:
+            return None
+        parsed = ast.literal_eval(proc.stdout.strip())
+        if isinstance(parsed, list):
+            return [str(x) for x in parsed]
+    except Exception:
+        pass
+    return None
+
+
+def _write_gsettings_enabled_extensions(exts: list[str]) -> bool:
+    if not shutil.which("gsettings"):
+        return False
+    try:
+        proc = subprocess.run(
+            ["gsettings", "set", "org.gnome.shell", "enabled-extensions", str(exts)],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        return proc.returncode == 0
+    except Exception:
+        return False
+
+
+def _query_gnome_shell_ext_info() -> tuple[bool, str]:
+    if not shutil.which("gnome-extensions"):
+        return False, ""
+    try:
+        proc = subprocess.run(
+            ["gnome-extensions", "info", GNOME_EXT_UUID],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        if proc.returncode != 0:
+            return False, ""
+        state = ""
+        for line in proc.stdout.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("State:") or stripped.startswith("状态：") or stripped.startswith("状态:"):
+                state = stripped.split(":", 1)[-1].split("：", 1)[-1].strip()
+                break
+        return True, state
+    except Exception:
+        return False, ""
+
+
+def get_gnome_extension_status() -> dict:
+    is_linux = sys.platform.startswith("linux")
+    desktop = (os.environ.get("XDG_CURRENT_DESKTOP") or "").upper()
+    has_gnome_cli = bool(shutil.which("gnome-shell") or shutil.which("gnome-extensions"))
+    is_gnome = is_linux and ("GNOME" in desktop or has_gnome_cli)
+    is_wayland = (os.environ.get("XDG_SESSION_TYPE") or "").lower() == "wayland" or bool(
+        os.environ.get("WAYLAND_DISPLAY")
+    )
+    src_dir = _gnome_ext_source_dir()
+    install_dir = _gnome_ext_install_dir()
+    installed = os.path.isfile(os.path.join(install_dir, "metadata.json"))
+
+    shell_ver = ""
+    if is_gnome and shutil.which("gnome-shell"):
+        try:
+            proc = subprocess.run(["gnome-shell", "--version"], capture_output=True, text=True, timeout=2)
+            if proc.returncode == 0:
+                shell_ver = proc.stdout.strip()
+        except Exception:
+            pass
+
+    gsettings_exts = _read_gsettings_enabled_extensions() if is_gnome else None
+    enabled_in_gsettings = bool(gsettings_exts is not None and GNOME_EXT_UUID in gsettings_exts)
+    loaded_in_shell, shell_state = _query_gnome_shell_ext_info() if is_gnome else (False, "")
+    enabled = enabled_in_gsettings or shell_state.upper() in ("ACTIVE", "ENABLED", "INITIALIZED", "已启用", "活跃")
+
+    supported = bool(is_gnome and (src_dir is not None or installed))
+    reason = ""
+    if not is_linux:
+        reason = "仅支持 Linux GNOME 桌面"
+    elif not is_gnome:
+        reason = "未检测到 GNOME Shell 桌面环境"
+    elif src_dir is None and not installed:
+        reason = "未找到 GNOME 扩展源文件"
+
+    needs_relogin = bool(supported and installed and is_wayland and not loaded_in_shell)
+    return {
+        "supported": supported,
+        "reason": reason,
+        "is_gnome": is_gnome,
+        "is_wayland": is_wayland,
+        "gnome_shell_version": shell_ver,
+        "uuid": GNOME_EXT_UUID,
+        "installed": installed,
+        "enabled": bool(installed and enabled),
+        "loaded_in_shell": loaded_in_shell,
+        "shell_state": shell_state,
+        "needs_relogin": needs_relogin,
+        "install_path": install_dir,
+        "source_available": src_dir is not None,
+    }
+
+
+def control_gnome_extension(action: str) -> tuple[bool, dict]:
+    status = get_gnome_extension_status()
+    if not status["supported"]:
+        status["error"] = status.get("reason") or "GNOME extension is not supported on this platform"
+        return False, status
+
+    install_dir = _gnome_ext_install_dir()
+    src_dir = _gnome_ext_source_dir()
+
+    if action == "install":
+        if not src_dir:
+            status["error"] = "GNOME extension source directory not found"
+            return False, status
+        try:
+            os.makedirs(os.path.dirname(install_dir), exist_ok=True)
+            if os.path.islink(install_dir):
+                os.unlink(install_dir)
+            elif os.path.exists(install_dir):
+                shutil.rmtree(install_dir)
+            shutil.copytree(src_dir, install_dir)
+        except OSError as exc:
+            status["error"] = f"Failed to copy GNOME extension: {exc}"
+            return False, status
+
+        exts = _read_gsettings_enabled_extensions()
+        if exts is not None and GNOME_EXT_UUID not in exts:
+            exts.append(GNOME_EXT_UUID)
+            _write_gsettings_enabled_extensions(exts)
+        if shutil.which("gnome-extensions"):
+            subprocess.run(["gnome-extensions", "enable", GNOME_EXT_UUID], capture_output=True, timeout=3)
+        return True, get_gnome_extension_status()
+
+    if action == "uninstall":
+        if shutil.which("gnome-extensions"):
+            subprocess.run(["gnome-extensions", "disable", GNOME_EXT_UUID], capture_output=True, timeout=3)
+        exts = _read_gsettings_enabled_extensions()
+        if exts is not None and GNOME_EXT_UUID in exts:
+            exts = [x for x in exts if x != GNOME_EXT_UUID]
+            _write_gsettings_enabled_extensions(exts)
+        try:
+            if os.path.islink(install_dir):
+                os.unlink(install_dir)
+            elif os.path.exists(install_dir):
+                shutil.rmtree(install_dir)
+        except OSError as exc:
+            status = get_gnome_extension_status()
+            status["error"] = f"Failed to remove GNOME extension: {exc}"
+            return False, status
+        return True, get_gnome_extension_status()
+
+    if action in ("enable", "disable"):
+        if not status["installed"]:
+            status["error"] = "GNOME extension is not installed yet"
+            return False, status
+        exts = _read_gsettings_enabled_extensions()
+        if exts is not None:
+            if action == "enable" and GNOME_EXT_UUID not in exts:
+                exts.append(GNOME_EXT_UUID)
+                _write_gsettings_enabled_extensions(exts)
+            elif action == "disable" and GNOME_EXT_UUID in exts:
+                exts = [x for x in exts if x != GNOME_EXT_UUID]
+                _write_gsettings_enabled_extensions(exts)
+        if shutil.which("gnome-extensions"):
+            subprocess.run(["gnome-extensions", action, GNOME_EXT_UUID], capture_output=True, timeout=3)
+        return True, get_gnome_extension_status()
+
+    status["error"] = f"Unsupported action: {action}"
+    return False, status
 
 
 def _sanitize_palette(raw: object) -> dict[str, str]:
@@ -560,6 +850,15 @@ class TelemetryHandler(BaseHTTPRequestHandler):
             self._send_json(200 if ok else 400 if not payload.get("supported", True) else 500, payload)
             return
 
+        if path == "/api/gnome-extension/control":
+            action = body.get("action")
+            if action not in ("install", "uninstall", "enable", "disable"):
+                self._send_json(400, {"error": "Invalid 'action'; expected install|uninstall|enable|disable"})
+                return
+            ok, payload = control_gnome_extension(action)
+            self._send_json(200 if ok else 400 if not payload.get("supported", True) else 500, payload)
+            return
+
         if path == "/api/hud/config":
             with _HUD_CFG_LOCK:
                 cfg = _load_hud_config()
@@ -633,6 +932,10 @@ class TelemetryHandler(BaseHTTPRequestHandler):
 
         if path == "/api/hud/status":
             self._send_json(200, get_hud_status())
+            return
+
+        if path == "/api/gnome-extension/status":
+            self._send_json(200, get_gnome_extension_status())
             return
 
         if path == "/api/theme/system":
